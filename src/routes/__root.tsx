@@ -151,7 +151,7 @@ function RootShell({ children }: { children: ReactNode }) {
         />
       </head>
       {/* Remove overflow-hidden or fixed heights from body */}
-      <body className="min-h-screen bg-background text-foreground antialiased flex flex-col">
+      <body className="flex min-h-screen bg-background text-foreground antialiased flex-col">
         {children}
         <Scripts />
       </body>
