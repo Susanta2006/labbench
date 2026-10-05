@@ -13,6 +13,7 @@ import { useEffect, type ReactNode } from "react";
 import appCss from "../styles.css?url";
 import { reportError } from "../lib/error-reporting";
 import { CookieBanner } from "@/components/CookieBanner";
+import { Footer } from "@/components/Footer";
 
 const applicationStructuredData = {
   "@context": "https://schema.org",
@@ -163,8 +164,12 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-      <Outlet />
+      <main className="flex-1">
+        <Outlet />
+      </main>
+      <Footer />
+      </div>
       <CookieBanner />
-    </QueryClientProvider>
+  </QueryClientProvider>
   );
 }
