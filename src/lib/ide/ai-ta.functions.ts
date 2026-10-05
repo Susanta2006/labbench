@@ -5,52 +5,136 @@ const SYSTEM = `You are LabBench AI TA, a patient teaching assistant for college
 Explain the syntax/logic error concept in simple English under 150 words. Do NOT provide or write the corrected code.
 You may point to the line number and name the concept (e.g. "missing semicolon", "off-by-one", "type mismatch"), and give a hint about what to check. Never output a code block or a fixed version of the program.`;
 
-export const askAiTa = createServerFn({ method: "POST" })
-  .inputValidator((d) =>
-    z.object({ language: z.string().max(40), code: z.string().max(20_000), output: z.string().max(8_000) }).parse(d),
-  )
-  .handler(async ({ data }) => {
-    const key = process.env["GEMINI_API_KEY"];
-    if (!key) return { ok: false as const, error: "AI is not configured." };
-    
-    const model = process.env["GEMINI_MODEL"] || "gemini-3.8-flash";
+const TRANSIENT_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 
-    // Build the consolidated user prompt for the standalone 'input' parameter
-    const userPrompt = `Language: ${data.language}\n\nCode:\n${data.code}\n\nCompiler/terminal output:\n${data.output}`;
+type Provider = {
+  name: string;
+  endpoint: string;
+  key: string;
+  model: string;
+};
 
-    // Target the modern Interactions API endpoint
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/interactions`, {
-      method: "POST",
-      headers: { 
-        "Content-Type": "application/json", 
-        "x-goog-api-key": key 
-      },
-      body: JSON.stringify({
-        model,
-        // The Interactions API uses system_instruction and input rather than messages array
-        system_instruction: SYSTEM,
-        input: userPrompt
-      }),
+function configuredProviders(): Provider[] {
+  const providers: Provider[] = [];
+  const geminiKey = process.env["GEMINI_API_KEY"];
+  if (geminiKey) {
+    providers.push({
+      name: "Gemini",
+      endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+      key: geminiKey,
+      model: process.env["GEMINI_MODEL"] || "gemini-3.8-flash",
     });
+  }
+  const openRouterKey = process.env["OPENROUTER_API_KEY"];
+  if (openRouterKey) {
+    providers.push({
+      name: "OpenRouter",
+      endpoint: "https://openrouter.ai/api/v1/chat/completions",
+      key: openRouterKey,
+      model: process.env["OPENROUTER_MODEL"] || "openrouter/free",
+    });
+  }
+  return providers;
+}
 
-    if (!res.ok) {
-      const body = await res.text();
-      console.error(`AI TA failed [${res.status}]: ${body}`);
-      const msg = res.status === 429 ? "AI is busy right now, please try again in a minute."
-        : res.status === 402 ? "AI credits for this app have run out. Please contact the developer."
-        : `AI request failed (${res.status}).`;
-      return { ok: false as const, error: msg };
+async function requestCompletion(provider: Provider, prompt: string): Promise<Response | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let response: Response;
+    try {
+      response = await fetch(provider.endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${provider.key}` },
+        body: JSON.stringify({
+          model: provider.model,
+          stream: true,
+          messages: [
+            { role: "system", content: SYSTEM },
+            { role: "user", content: prompt },
+          ],
+        }),
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (error) {
+      console.error(`AI TA ${provider.name} request failed:`, error);
+      if (attempt === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        continue;
+      }
+      return null;
     }
 
-    const json = await res.json();
-    
-    // The Interactions API encapsulates the text response inside the interaction object
-    let text = json.interaction?.outputText ?? "";
+    if (response.ok && response.body) return response;
 
-    // Safety: strip any code blocks the model might still produce
-    text = text.replace(/```[\s\(\S\)]*?```/g, "[code removed — try writing the fix yourself!]").trim();
-    
-    if (!text) return { ok: false as const, error: "The AI TA could not answer this one." };
-    
-    return { ok: true as const, text };
+    const body = await response.text();
+    console.error(`AI TA ${provider.name} failed [${response.status}]: ${body}`);
+    if (attempt === 0 && (TRANSIENT_STATUSES.has(response.status) || response.status === 200)) {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+async function readStream(response: Response): Promise<string> {
+  if (!response.body) throw new Error("AI provider returned no response stream.");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let text = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+      const payload = trimmed.slice(5).trim();
+      if (payload === "[DONE]") continue;
+      try {
+        const chunk = JSON.parse(payload);
+        text += chunk.choices?.[0]?.delta?.content ?? "";
+      } catch {
+        // Ignore incomplete SSE chunks; the next network chunk completes them.
+      }
+    }
+  }
+  return text.replace(/```[\s\S]*?```/g, "[code removed — try writing the fix yourself!]").trim();
+}
+
+function fallbackHint() {
+  return {
+    ok: true as const,
+    fallback: true as const,
+    text: "I can’t reach right now, so this is a general troubleshooting hint rather than a diagnosis: start with the first compiler or terminal error, check the named line and the line just before it, then verify spelling, punctuation, and expected types or values. Fix one issue at a time and run the program again.",
+  };
+}
+
+export const askAiTa = createServerFn({ method: "POST" })
+  .inputValidator((d) =>
+    z
+      .object({
+        language: z.string().max(40),
+        code: z.string().max(20_000),
+        output: z.string().max(8_000),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const providers = configuredProviders();
+    const prompt = `Language: ${data.language}\n\nCode:\n${data.code}\n\nCompiler/terminal output:\n${data.output}`;
+    for (const provider of providers) {
+      const response = await requestCompletion(provider, prompt);
+      if (!response) continue;
+      try {
+        const text = await readStream(response);
+        if (text) return { ok: true as const, fallback: false as const, text };
+        console.error(`AI TA ${provider.name} returned an empty response.`);
+      } catch (error) {
+        console.error(`AI TA ${provider.name} stream failed:`, error);
+      }
+    }
+    return fallbackHint();
   });
