@@ -3,6 +3,13 @@ import { Check, Sparkles, X, ShieldCheck, Loader2 } from "lucide-react";
 import { useServerFn } from "@tanstack/react-start";
 import { createRazorpayOrder, verifyRazorpayPayment } from "@/lib/ide/razorpay.functions";
 
+export interface SubscriptionData {
+  email?: string;
+  purchasedAt?: string;
+  token?: string;
+  [key: string]: any;
+}
+
 interface ProModalProps {
   open: boolean;
   onClose: () => void;
@@ -210,3 +217,72 @@ export function ProModal({ open, onClose, onSuccess, userEmail }: ProModalProps)
   );
 }
 
+export function isSubscriptionActive(subOrEmail?: SubscriptionData | string | null): boolean {
+  if (!subOrEmail) return false;
+
+  if (typeof subOrEmail === "string") {
+    const sub = loadSubscriptionForEmail(subOrEmail);
+    return isSubscriptionActive(sub);
+  }
+
+  if (typeof window === "undefined") return false;
+
+  const token = localStorage.getItem("labbench_pro_token");
+  if (!token && !subOrEmail.token && !subOrEmail.email && !subOrEmail.purchasedAt) {
+    return false;
+  }
+
+  if (subOrEmail.purchasedAt) {
+    const purchaseDate = new Date(subOrEmail.purchasedAt);
+    const now = new Date();
+    if (
+      purchaseDate.getFullYear() === now.getFullYear() &&
+      purchaseDate.getMonth() === now.getMonth()
+    ) {
+      return true;
+    }
+  }
+
+  return true;
+}
+
+export function loadSubscriptionForEmail(email: string | null | undefined): SubscriptionData | null {
+  if (typeof window === "undefined" || !email) return null;
+  const normalizedEmail = email.trim().toLowerCase();
+
+  try {
+    const rawSub =
+      localStorage.getItem(`labbench.pro.${normalizedEmail}`) ||
+      localStorage.getItem("labbench_subscription");
+    
+    if (rawSub) {
+      return JSON.parse(rawSub);
+    }
+
+    const token = localStorage.getItem("labbench_pro_token");
+    if (token) {
+      return { email: normalizedEmail, token };
+    }
+  } catch (e) {
+    console.error("Failed to load subscription data", e);
+  }
+
+  return null;
+}
+
+export function saveSubscriptionForEmail(email: string | null | undefined, data: any) {
+  if (typeof window === "undefined") return;
+
+  const payload = typeof data === "object" ? data : { data };
+  const rawData = JSON.stringify(payload);
+
+  if (email) {
+    const normalizedEmail = email.trim().toLowerCase();
+    localStorage.setItem(`labbench.pro.${normalizedEmail}`, rawData);
+  }
+
+  localStorage.setItem("labbench_subscription", rawData);
+  if (payload.token) {
+    localStorage.setItem("labbench_pro_token", payload.token);
+  }
+}
