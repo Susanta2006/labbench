@@ -13,6 +13,10 @@ export const Route = createFileRoute("/")({
           "Free online code editor and compiler for C, C++, Java, Python, and Web development. Designed for college students to run code, save output screenshots, and get AI error explanations.",
       },
       {
+         name: "google-site-verification",
+         content: "8o9Dm94uzc3XtGBMijfLCeGXH8k0MQgKiY1eZskSbjE",
+      },
+      {
         name: "keywords",
         content:
           "online compiler, C++ online editor, python compiler, lab report output generator, student code editor, labbench, C language compiler",
@@ -32,7 +36,7 @@ export const Route = createFileRoute("/")({
         content: "The ultimate online lab IDE for college students with zero setup required.",
       },
     ],
-    links: [{ rel: "canonical", href: "https://labbench.app" }],
+    links: [{ rel: "canonical", href: "https://labbench-woad.vercel.app" }],
   }),
   component: Index,
 });
