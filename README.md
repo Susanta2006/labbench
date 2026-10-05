@@ -4,18 +4,15 @@ LabBench is a browser-based coding workspace for students. It combines a
 Monaco-powered editor, a file explorer, interactive terminal, web preview, and
 AI-powered hinting for lab work.
 
-## The problem behind LabBench
+## The Problem Behind LabBench
 
-I built LabBench around a familiar computer-lab experience: students can lose
-valuable time to restrictions and disconnected tools instead of learning and
-finishing their practical work. Lab PCs may not allow software installation or
-personal sign-ins, and their local files may not be available after a session.
-Meanwhile, practical submissions often need clear output screenshots, which
-students otherwise have to capture, clean up, and move between devices by hand.
+LabBench was built to solve the real-world friction students face during practical computer lab sessions:
 
-Debugging creates another challenge. A tool that simply supplies finished code
-can help a student move past an error without teaching the concept. LabBench
-uses AI to explain errors with hints rather than corrected solutions.
+* **Hardware & Accessibility Barriers:** Many students do not own personal laptops or computers to practice coding or generate execution outputs. LabBench’s Progressive Web App (PWA) architecture allows them to run, debug, and save code directly on mobile devices or low-spec hardware.
+* **Lab Environment Restrictions:** College lab PCs often restrict software installations, block personal sign-ins, and clear local files after every session.
+* **Tedious Output Workflows:** Submitting practical lab assignments traditionally requires manually capturing, cleaning up, and transferring output screenshots between different devices.
+* **Passive AI Dependency:** Traditional AI tools often provide direct code solutions, allowing students to bypass bugs without understanding them. LabBench integrates AI designed to explain errors with conceptual hints rather than raw answers, fostering true problem-solving skills.
+
 
 ## Features
 
