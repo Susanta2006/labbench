@@ -59,7 +59,7 @@ import {
   loadSubscriptionForEmail,
   saveSubscriptionForEmail,
   type SubscriptionData,
-} from "@/lib/ide/subscription";
+} from "@/lib/ide/subscription.tsx";
 
 type Status = "idle" | "running" | "done" | "error" | "stopped";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
