@@ -80,9 +80,13 @@ online compiler service.
    or include it when sharing a workspace.
 4. **Explain errors without writing the answer:** A server function validates
    the language, code, and output before sending them to the configured Gemini
-   API model. Its teaching-assistant instructions ask for a short explanation
-   and hint, not corrected code; code blocks in the response are stripped as an
-   extra safeguard. The model can be configured with `GEMINI_MODEL`.
+   API model. If configured, OpenRouter's free-model router is tried as a
+   backup; transient failures are retried once per provider. If no model can
+   answer, students receive a general troubleshooting hint instead of a
+   provider error. Free model availability and rate limits are not guaranteed.
+   Teaching-assistant instructions request a short explanation and hint, not
+   corrected code; code blocks in the response are stripped as an extra
+   safeguard.
 5. **Beam work to a phone:** LabBench creates a temporary share record through
    a server function and displays its link as a QR code. The random link ID is
    the access capability; reads reject expired links, which are set to expire
@@ -140,18 +144,20 @@ online compiler service.
 The variable names are listed in `.env.example`. Keep server-only secrets out
 of browser-prefixed variables and out of source control.
 
-| Variable | Used for | Required |
-| --- | --- | --- |
-| `VITE_SUPABASE_URL` | Supabase client in the browser | For Supabase-backed features |
-| `VITE_SUPABASE_PUBLISHABLE_KEY` | Browser-side Supabase authentication | For Supabase-backed features |
-| `VITE_SUPABASE_PROJECT_ID` | Supabase/Lovable project configuration | Depends on deployment |
-| `SUPABASE_URL` | Server-side Supabase client | For server-side workspace sharing |
-| `SUPABASE_PUBLISHABLE_KEY` | Server-side Supabase configuration | As required by the Supabase deployment |
-| `SUPABASE_SERVICE_ROLE_KEY` | Trusted server-side Supabase operations | For server-side workspace sharing; never expose to the browser |
-| `GEMINI_API_KEY` | AI Teaching Assistant requests | For AI explanations |
-| `GEMINI_MODEL` | Optional Gemini model override | No; the server has a default |
-| `VITE_RAZORPAY_KEY_ID` or `RAZORPAY_KEY_ID` | Razorpay checkout order configuration | For Pro checkout |
-| `RAZORPAY_KEY_SECRET` | Server-side Razorpay order and signature verification | For Pro checkout; never expose to the browser |
+| Variable                                    | Used for                                              | Required                                                       |
+| ------------------------------------------- | ----------------------------------------------------- | -------------------------------------------------------------- |
+| `VITE_SUPABASE_URL`                         | Supabase client in the browser                        | For Supabase-backed features                                   |
+| `VITE_SUPABASE_PUBLISHABLE_KEY`             | Browser-side Supabase authentication                  | For Supabase-backed features                                   |
+| `VITE_SUPABASE_PROJECT_ID`                  | Supabase/Lovable project configuration                | Depends on deployment                                          |
+| `SUPABASE_URL`                              | Server-side Supabase client                           | For server-side workspace sharing                              |
+| `SUPABASE_PUBLISHABLE_KEY`                  | Server-side Supabase configuration                    | As required by the Supabase deployment                         |
+| `SUPABASE_SERVICE_ROLE_KEY`                 | Trusted server-side Supabase operations               | For server-side workspace sharing; never expose to the browser |
+| `GEMINI_API_KEY`                            | AI Teaching Assistant requests                        | For AI explanations                                            |
+| `GEMINI_MODEL`                              | Optional Gemini model override                        | No; the server has a default                                   |
+| `OPENROUTER_API_KEY`                        | Optional AI TA backup provider                        | For model failover                                             |
+| `OPENROUTER_MODEL`                          | Optional OpenRouter model override                    | No; defaults to `openrouter/free`                              |
+| `VITE_RAZORPAY_KEY_ID` or `RAZORPAY_KEY_ID` | Razorpay checkout order configuration                 | For Pro checkout                                               |
+| `RAZORPAY_KEY_SECRET`                       | Server-side Razorpay order and signature verification | For Pro checkout; never expose to the browser                  |
 
 Google sign-in and Drive uploads also require Google OAuth to be configured
 with the appropriate Drive file permission in the Supabase authentication
@@ -166,15 +172,15 @@ not currently implemented.
 
 ## Available scripts
 
-| Command | Description |
-| --- | --- |
-| `npm run dev` | Start the Vite development server |
-| `npm run build` | Create a production build |
-| `npm run build:dev` | Create a development-mode build |
-| `npm run preview` | Preview the most recent production build |
-| `npm run lint` | Run ESLint |
-| `npm test` | Run the Vitest test suite once |
-| `npm run test:watch` | Run Vitest in watch mode |
+| Command              | Description                              |
+| -------------------- | ---------------------------------------- |
+| `npm run dev`        | Start the Vite development server        |
+| `npm run build`      | Create a production build                |
+| `npm run build:dev`  | Create a development-mode build          |
+| `npm run preview`    | Preview the most recent production build |
+| `npm run lint`       | Run ESLint                               |
+| `npm test`           | Run the Vitest test suite once           |
+| `npm run test:watch` | Run Vitest in watch mode                 |
 
 ## Project layout
 
