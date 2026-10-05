@@ -49,7 +49,9 @@ function Index() {
   return (
     <ClientOnly fallback={<Loading />}>
       <Suspense fallback={<Loading />}>
-        <IDE />
+        <div className="w-full max-md:[&>div]:h-auto max-md:[&>div]:min-h-screen">
+           <IDE />
+        </div>
       </Suspense>
     </ClientOnly>
   );
