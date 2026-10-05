@@ -14,6 +14,27 @@ import appCss from "../styles.css?url";
 import { reportError } from "../lib/error-reporting";
 import { CookieBanner } from "@/components/CookieBanner";
 
+const applicationStructuredData = {
+  "@context": "https://schema.org",
+  "@type": ["SoftwareApplication", "WebApplication"],
+  name: "LabBench",
+  url: "https://labbench.app",
+  description:
+    "Free online code editor and compiler for C, C++, Java, Python, and Web development. Designed for college students to run code, save output screenshots, and get AI error explanations.",
+  applicationCategory: "DeveloperApplication",
+  operatingSystem: "All",
+  featureList: [
+    "Online code editor and compiler for C, C++, Java, Python, and Web development",
+    "Save code output screenshots for lab reports",
+    "AI explanations for code errors",
+  ],
+  offers: {
+    "@type": "Offer",
+    price: "0",
+    priceCurrency: "USD",
+  },
+};
+
 function NotFoundComponent() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
@@ -79,8 +100,12 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "LabBench" },
-      { name: "description", content: "Browser IDE for students" },
+      { title: "LabBench — Online Code IDE & AI Teaching Assistant" },
+      {
+        name: "description",
+        content:
+          "Free online code editor and compiler for C, C++, Java, Python, and Web development. Designed for college students to run code, save output screenshots, and get AI error explanations.",
+      },
       { name: "theme-color", content: "#09090b" },
     ],
     links: [
@@ -91,6 +116,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         href: "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap",
       },
       { rel: "icon", href: "/icon.svg", type: "image/svg+xml" },
+      { rel: "apple-touch-icon", href: "/apple-touch-icon.png", sizes: "180x180" },
       { rel: "manifest", href: "/site.webmanifest" },
     ],
   }),
@@ -105,6 +131,10 @@ function RootShell({ children }: { children: ReactNode }) {
     <html lang="en">
       <head>
         <HeadContent />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(applicationStructuredData) }}
+        />
       </head>
       <body>
         {children}
