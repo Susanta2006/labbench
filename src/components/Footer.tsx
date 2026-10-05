@@ -4,11 +4,9 @@ export function Footer() {
   const currentYear = new Date().getFullYear();
 
   return (
-    <footer className="w-full border-t border-border bg-card/50 text-xs text-muted-foreground backdrop-blur-sm">
-      <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 px-4 py-6 sm:flex-row sm:px-6">
-        
-        {/* Copyright & Core Info */}
-        <div className="flex flex-col items-center gap-1 sm:items-start">
+    <footer className="w-full border-t border-border bg-card/80 py-6 text-xs text-muted-foreground backdrop-blur-sm z-10">
+      <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 px-4 text-center sm:flex-row sm:text-left sm:px-6">
+        <div>
           <p className="font-medium text-foreground/80">
             © {currentYear} LabBench. All rights reserved.
           </p>
@@ -17,61 +15,45 @@ export function Footer() {
           </p>
         </div>
 
-        {/* Links: Legal & Developer Details */}
-        <div className="flex flex-wrap items-center justify-center gap-6 text-xs">
-          {/* Legal Links */}
-          <div className="flex items-center gap-4 border-r border-border/60 pr-6">
-            <a
-              href="/privacy"
-              className="flex items-center gap-1.5 transition-colors hover:text-foreground"
-            >
-              <Shield size={13} className="text-muted-foreground" />
-              <span>Privacy Policy</span>
-            </a>
-            <a
-              href="/terms"
-              className="flex items-center gap-1.5 transition-colors hover:text-foreground"
-            >
-              <FileText size={13} className="text-muted-foreground" />
-              <span>Terms & Conditions</span>
-            </a>
-          </div>
-
-          {/* Developer Details */}
-          <div className="flex items-center gap-3">
-            <span className="text-[11px] font-semibold text-foreground/70">
-              Dev:
-            </span>
+        <div className="flex flex-wrap items-center justify-center gap-4 text-xs">
+          <a href="/privacy" className="hover:text-foreground transition-colors">
+            Privacy Policy
+          </a>
+          <span>•</span>
+          <a href="/terms" className="hover:text-foreground transition-colors">
+            Terms & Conditions
+          </a>
+          <span>•</span>
+          <div className="flex items-center gap-2">
             <a
               href="https://susanta-banik.vercel.app/"
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1 rounded-md p-1 transition-colors hover:bg-muted hover:text-foreground"
-              title="Portfolio"
+              aria-label="Portfolio"
+              className="p-1 hover:text-foreground"
             >
-              <Globe size={14} />
+              <Globe size={15} />
             </a>
             <a
               href="https://github.com/Susanta2006"
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1 rounded-md p-1 transition-colors hover:bg-muted hover:text-foreground"
-              title="GitHub"
+              aria-label="GitHub"
+              className="p-1 hover:text-foreground"
             >
-              <Github size={14} />
+              <Github size={15} />
             </a>
             <a
               href="https://www.linkedin.com/in/susanta-banik"
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1 rounded-md p-1 transition-colors hover:bg-muted hover:text-foreground"
-              title="LinkedIn"
+              aria-label="LinkedIn"
+              className="p-1 hover:text-foreground"
             >
-              <Linkedin size={14} />
+              <Linkedin size={15} />
             </a>
           </div>
         </div>
-
       </div>
     </footer>
   );
