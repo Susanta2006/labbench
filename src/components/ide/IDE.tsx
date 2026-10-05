@@ -877,7 +877,7 @@ export function IDE() {
   }, []);
 
   return (
-    <div className="flex h-[100dvh] flex-col bg-background text-foreground">
+    <div className="flex min-h-[100dvh] w-full flex-col bg-background text-foreground">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-rail px-3 md:hidden">
         <Button 
           variant="ghost" 
