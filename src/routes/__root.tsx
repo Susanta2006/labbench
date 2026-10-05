@@ -166,7 +166,7 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       <div className="flex min-h-screen flex-col flex-1">
         {/* main container must allow contents to define page height */}
-        <main className="flex-1 w-full">
+        <main className="flex-1 w-full [&>div]:max-md:h-auto [&>div]:max-md:min-h-screen">
           <Outlet />
           <Footer />
         </main>
