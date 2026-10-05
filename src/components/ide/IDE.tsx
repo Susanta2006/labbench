@@ -60,6 +60,17 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
 const DAILY_CREDITS = 5;
 const today = () => new Date().toISOString().slice(0, 10);
+const normalizeCredits = (raw: unknown) => {
+  const fallback = { date: today(), credits: DAILY_CREDITS };
+  if (!raw || typeof raw !== "object") return fallback;
+  const value = raw as Record<string, unknown>;
+  const date = typeof value.date === "string" ? value.date : fallback.date;
+  if (typeof value.credits === "number" && Number.isFinite(value.credits)) {
+    return { date, credits: Math.max(0, Math.min(DAILY_CREDITS, value.credits)) };
+  }
+  const used = typeof value.used === "number" ? value.used : 0;
+  return { date, credits: Math.max(0, DAILY_CREDITS - used) };
+};
 
 function buildPreview(lang: Language, files: Record<string, string>) {
   const inFolder = (n: string) => files[`${lang.id}/${n}`];
@@ -73,12 +84,12 @@ function buildPreview(lang: Language, files: Record<string, string>) {
       .map((p) => files[p])
       .join("\n");
     return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${css}</style>
-<script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
-<script src="https://cdn.tailwindcss.com"></script></head><body><div id="root"></div>
-<script>window.onerror=(m)=>{document.body.insertAdjacentHTML('beforeend','<pre style="color:#b00020;padding:12px">'+m+'</pre>')}</script>
-<script type="text/babel" data-presets="react">${jsx.replace(/<\/script>/g, "<\\/script>")}</script></body></html>`;
+ <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+ <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+ <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+ <script src="https://cdn.tailwindcss.com"></script></head><body><div id="root"></div>
+ <script>window.onerror=(m)=>{document.body.insertAdjacentHTML('beforeend','<pre style="color:#b00020;padding:12px">'+m+'</pre>')}</script>
+ <script type="text/babel" data-presets="react">${jsx.replace(/<\/script>/g, "<\\/script>")}</script></body></html>`;
   }
   let html = inFolder(lang.entry) ?? "<h1>No index.html</h1>";
   html = html.replace(/<link[^>]*href=["']([^"']+)["'][^>]*>/g, (m, href) =>
@@ -94,11 +105,11 @@ function buildPreview(lang: Language, files: Record<string, string>) {
 
 const NODE_WORKER = `
 const fmt = a => a.map(x => typeof x === 'string' ? x : (()=>{try{return JSON.stringify(x,null,2)}catch{return String(x)}})()).join(' ');
-console.log = (...a) => postMessage({type:'out', text: fmt(a)+'\\n'});
+console.log = (...a) => postMessage({type:'out', text: fmt(a)+'\n'});
 console.info = console.log;
-console.error = console.warn = (...a) => postMessage({type:'err', text: fmt(a)+'\\n'});
-onmessage = async e => { try { await (new Function('return (async()=>{'+e.data+'\\n})()'))(); postMessage({type:'done',code:0}); }
- catch(err){ postMessage({type:'err', text: String(err && err.stack || err)+'\\n'}); postMessage({type:'done',code:1}); } };`;
+console.error = console.warn = (...a) => postMessage({type:'err', text: fmt(a)+'\n'});
+onmessage = async e => { try { await (new Function('return (async()=>{'+e.data+'\n})()'))(); postMessage({type:'done',code:0}); }
+ catch(err){ postMessage({type:'err', text: String(err && err.stack || err)+'\n'}); postMessage({type:'done',code:1}); } };`;
 
 export function IDE() {
   const { files, setFiles, saved, saveNow } = useWorkspace();
@@ -123,7 +134,7 @@ export function IDE() {
     text: "",
     error: "",
   });
-  const [credits, setCredits] = useState({ date: today(), used: 0 });
+  const [credits, setCredits] = useState({ date: today(), credits: DAILY_CREDITS });
   const [showUpgrade, setShowUpgrade] = useState(false);
   const [showTour, setShowTour] = useState(false);
   const [drawer, setDrawer] = useState(false);
@@ -185,7 +196,7 @@ export function IDE() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
   const isWeb = activeLang.kind === "web" || activeLang.kind === "react";
-  const creditsLeft = credits.date === today() ? DAILY_CREDITS - credits.used : DAILY_CREDITS;
+  const creditsLeft = credits.date === today() ? credits.credits : DAILY_CREDITS;
 
   const flash = (m: string, folderUrl: string | null = null) => {
     setToast(m);
@@ -205,11 +216,16 @@ export function IDE() {
     try {
       const l = localStorage.getItem("labbench.langs");
       if (l) setAddedLangs(JSON.parse(l));
-      const c = localStorage.getItem("labbench.aiCredits");
-      if (c) setCredits(JSON.parse(c));
+      const raw = localStorage.getItem("labbench.aiCredits");
+      const next = raw ? normalizeCredits(JSON.parse(raw)) : { date: today(), credits: DAILY_CREDITS };
+      const current = next.date === today() ? next : { date: today(), credits: DAILY_CREDITS };
+      setCredits(current);
+      localStorage.setItem("labbench.aiCredits", JSON.stringify(current));
       setInkSaver(localStorage.getItem("labbench.ink") === "1");
     } catch {
-      /* */
+      const current = { date: today(), credits: DAILY_CREDITS };
+      setCredits(current);
+      localStorage.setItem("labbench.aiCredits", JSON.stringify(current));
     }
   }, []);
   useEffect(() => {
@@ -705,7 +721,7 @@ export function IDE() {
   };
   const uploadToDrive = async () => {
     setMore(false);
-    
+
     // Check if student is signed in
     if (!userEmail) {
       if (confirm("You need to sign in with Google to upload files to your Google Drive. Sign in now?")) {
@@ -801,8 +817,8 @@ export function IDE() {
 
   // ---------- AI TA ----------
   const askTa = async () => {
-    const c = credits.date === today() ? credits : { date: today(), used: 0 };
-    if (c.used >= DAILY_CREDITS) {
+    const c = credits.date === today() ? credits : { date: today(), credits: DAILY_CREDITS };
+    if (c.credits <= 0) {
       setShowUpgrade(true);
       return;
     }
@@ -819,7 +835,7 @@ export function IDE() {
       });
       if (r.ok) {
         if (!r.fallback) {
-          const next = { date: today(), used: c.used + 1 };
+          const next = { date: today(), credits: Math.max(0, c.credits - 1) };
           setCredits(next);
           localStorage.setItem("labbench.aiCredits", JSON.stringify(next));
         }
@@ -1071,7 +1087,7 @@ export function IDE() {
                   <div
                     key={p}
                     onClick={() => setActive(p)}
-                    className={`group flex cursor-pointer items-center gap-2 border-r px-3 text-[13px] ${active === p ? "border-t-2 border-t-primary bg-editor text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                    className={`group flex cursor-pointer items-center gap-2 border-r px-3 text-[13px] ${active === p ? "border-t-2 border-t-primary bg-editor text-foreground" : "text-muted-foreground hover:bg-muted"}`}
                   >
                     <FileCode2 size={13} className="text-primary" />
                     <span className="whitespace-nowrap">{p.split("/").pop()}</span>
@@ -1182,33 +1198,33 @@ export function IDE() {
               >
                 <MoreHorizontal />
               </Button>
-                {more && <div className="absolute right-2 top-10 z-30 w-56 rounded-md border bg-popover p-1 shadow-xl">
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    className="w-full justify-start text-primary" 
-                    disabled={uploadingDrive}
-                    onClick={() => { void uploadToDrive(); }}
-                  >
-                    {uploadingDrive ? <Loader2 className="animate-spin" /> : <Cloud />}
-                    {uploadingDrive ? "Uploading to Drive..." : "Upload to Google Drive"}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="w-full justify-start"
-                    onClick={() => {
-                      setMore(false);
-                      setShowTour(true);
-                    }}
-                  >
-                    <GraduationCap /> Product Tour
-                  </Button>
-                  <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => { void shareWorkspace(); }}><Share2 /> Send to phone</Button>
-                  <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => { setInkSaver((v) => !v); setMore(false); }}>{inkSaver ? <Moon /> : <Sun />} {inkSaver ? "Dark output" : "Light output"}</Button>
-                  <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => { void downloadPng(); setMore(false); }}><Download /> Download PNG</Button>
-                  <Button variant="ghost" size="sm" className="w-full justify-start" onClick={clearScreen}><RotateCcw /> Clear terminal</Button>
-                </div>}
+              {more && <div className="absolute right-2 top-10 z-30 w-56 rounded-md border bg-popover p-1 shadow-xl">
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  className="w-full justify-start text-primary" 
+                  disabled={uploadingDrive}
+                  onClick={() => { void uploadToDrive(); }}
+                >
+                  {uploadingDrive ? <Loader2 className="animate-spin" /> : <Cloud />}
+                  {uploadingDrive ? "Uploading to Drive..." : "Upload to Google Drive"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-start"
+                  onClick={() => {
+                    setMore(false);
+                    setShowTour(true);
+                  }}
+                >
+                  <GraduationCap /> Product Tour
+                </Button>
+                <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => { void shareWorkspace(); }}><Share2 /> Send to phone</Button>
+                <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => { setInkSaver((v) => !v); setMore(false); }}>{inkSaver ? <Moon /> : <Sun />} {inkSaver ? "Dark" : "Light"} mode</Button>
+                <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => { void downloadPng(); setMore(false); }}><Download /> Download PNG</Button>
+                <Button variant="ghost" size="sm" className="w-full justify-start" onClick={clearScreen}><RotateCcw /> Clear terminal</Button>
+              </div>}
             </div>
 
             <div className="relative min-h-0 flex-1">
