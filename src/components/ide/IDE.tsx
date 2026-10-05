@@ -818,9 +818,11 @@ export function IDE() {
         },
       });
       if (r.ok) {
-        const next = { date: today(), used: c.used + 1 };
-        setCredits(next);
-        localStorage.setItem("labbench.aiCredits", JSON.stringify(next));
+        if (!r.fallback) {
+          const next = { date: today(), used: c.used + 1 };
+          setCredits(next);
+          localStorage.setItem("labbench.aiCredits", JSON.stringify(next));
+        }
         setAi({ open: true, loading: false, text: r.text, error: "" });
       } else setAi({ open: true, loading: false, text: "", error: r.error });
     } catch (e) {
