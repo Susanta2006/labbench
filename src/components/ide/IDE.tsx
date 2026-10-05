@@ -877,7 +877,7 @@ export function IDE() {
   }, []);
 
   return (
-    <div className="flex min-h-[100dvh] w-full flex-col bg-background text-foreground">
+    <div className="flex min-h-screen w-full flex-col bg-background text-foreground">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-rail px-3 md:hidden">
         <Button 
           variant="ghost" 
@@ -895,7 +895,7 @@ export function IDE() {
           <Play /> Run
         </Button>
       </header>
-      <div className="flex min-h-0 flex-1">
+      <div className="flex flex-1 flex-col md:flex-row">
         {drawer && (
           <div
             className="fixed inset-0 z-40 bg-background/70 md:hidden"
@@ -1077,7 +1077,7 @@ export function IDE() {
           className="flex min-w-0 flex-1 flex-col-reverse md:flex-row"
           style={{ ["--split" as string]: `${split}%` }}
         >
-          <section className="flex h-[52%] min-h-0 min-w-0 flex-col bg-editor md:h-auto md:w-[var(--split)] md:shrink-0">
+          <section className="flex min-h-[450px] min-w-0 flex-col bg-editor md:min-h-0 md:w-[var(--split)] md:shrink-0">
             <div className="flex h-9 items-stretch border-b bg-panel">
               <select
                 value={langId}
@@ -1159,7 +1159,7 @@ export function IDE() {
             className="hidden w-1 shrink-0 cursor-col-resize bg-border hover:bg-primary md:block"
           />
 
-          <section className="flex h-[48%] min-h-0 min-w-0 flex-col border-b bg-panel md:h-auto md:flex-1 md:border-b-0">
+          <section className="flex min-h-[400px] min-w-0 flex-col border-b bg-panel md:min-h-0 md:flex-1 md:border-b-0">
             <div className="relative flex h-11 shrink-0 items-center gap-1 border-b px-2">
               <Button
                 variant={outTab === "preview" ? "secondary" : "ghost"}
