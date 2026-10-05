@@ -3,6 +3,7 @@
   "short_name": "LabBench",
   "description": "Zero-setup online code editor and compiler for C, C++, Python, Java, and Web Dev with instant output snapshots and AI lab assistance.",
   "start_url": "/",
+  "developer": "Susanta Banik",
   "display": "standalone",
   "background_color": "#09090b",
   "theme_color": "#09090b",
