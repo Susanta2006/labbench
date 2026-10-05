@@ -55,7 +55,7 @@ online compiler service.
        ┌───────────────────────────────┼───────────────────────────────┐
        ▼                               ▼                               ▼
 ┌─────────────────────┐     ┌──────────────────────┐       ┌─────────────────────┐
-│ Edit, run, capture  │     │ Temporary sharing   │       │ AI Teaching         │
+│ Edit, run, capture  │     │ Temporary sharing    │       │ AI Teaching         │
 │ in the browser      │     │ via QR/link          │       │ Assistant           │
 ├─────────────────────┤     ├──────────────────────┤       ├─────────────────────┤
 │ Monaco + local      │     │ Server function +    │       │ Server function +   │
