@@ -150,6 +150,13 @@ while signed-in Google users can get a proper Pro membership tied to their email
 and valid only for the current billing month. That makes the access model easier
 for students to understand and reduces misuse across devices or shared browsers.
 
+---
+
+## 📄 License & Intellectual Property
+
+LabBench is proprietary software created by Susanta Banik. Source code is made publicly available for technical evaluation, code review, and portfolio assessment. All rights reserved.
+
+---
 
 ## Developer:
 
