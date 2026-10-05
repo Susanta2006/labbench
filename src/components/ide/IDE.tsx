@@ -54,23 +54,18 @@ import { Terminal, type TerminalHandle } from "./Terminal";
 import { uploadWorkspaceToGoogleDrive } from "@/lib/ide/google-drive";
 import { ProModal } from "./ProModal";
 import { WalkthroughTour } from "./WalkthroughTour";
+import {
+  isSubscriptionActive,
+  loadSubscriptionForEmail,
+  saveSubscriptionForEmail,
+  type SubscriptionData,
+} from "@/lib/ide/subscription";
 
 type Status = "idle" | "running" | "done" | "error" | "stopped";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
 const DAILY_CREDITS = 5;
 const today = () => new Date().toISOString().slice(0, 10);
-const normalizeCredits = (raw: unknown) => {
-  const fallback = { date: today(), credits: DAILY_CREDITS };
-  if (!raw || typeof raw !== "object") return fallback;
-  const value = raw as Record<string, unknown>;
-  const date = typeof value.date === "string" ? value.date : fallback.date;
-  if (typeof value.credits === "number" && Number.isFinite(value.credits)) {
-    return { date, credits: Math.max(0, Math.min(DAILY_CREDITS, value.credits)) };
-  }
-  const used = typeof value.used === "number" ? value.used : 0;
-  return { date, credits: Math.max(0, DAILY_CREDITS - used) };
-};
 
 function buildPreview(lang: Language, files: Record<string, string>) {
   const inFolder = (n: string) => files[`${lang.id}/${n}`];
@@ -134,7 +129,8 @@ export function IDE() {
     text: "",
     error: "",
   });
-  const [credits, setCredits] = useState({ date: today(), credits: DAILY_CREDITS });
+  const [credits, setCredits] = useState({ date: today(), used: 0 });
+  const [proSubscription, setProSubscription] = useState<SubscriptionData | null>(null);
   const [showUpgrade, setShowUpgrade] = useState(false);
   const [showTour, setShowTour] = useState(false);
   const [drawer, setDrawer] = useState(false);
@@ -171,6 +167,21 @@ export function IDE() {
     return () => subscription.unsubscribe();
   }, []);
 
+  useEffect(() => {
+    if (!userEmail) {
+      setProSubscription(null);
+      return;
+    }
+    const currentEmail = userEmail.trim().toLowerCase();
+    const sync = () => setProSubscription(loadSubscriptionForEmail(currentEmail));
+    sync();
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key === `labbench.pro.${currentEmail}`) sync();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [userEmail]);
+
   const filesRef = useRef(files);
   filesRef.current = files;
   const activeRef = useRef(active);
@@ -196,7 +207,8 @@ export function IDE() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
   const isWeb = activeLang.kind === "web" || activeLang.kind === "react";
-  const creditsLeft = credits.date === today() ? credits.credits : DAILY_CREDITS;
+  const hasActivePro = !!userEmail && isSubscriptionActive(proSubscription);
+  const creditsLeft = hasActivePro ? Number.POSITIVE_INFINITY : credits.date === today() ? DAILY_CREDITS - credits.used : DAILY_CREDITS;
 
   const flash = (m: string, folderUrl: string | null = null) => {
     setToast(m);
@@ -216,16 +228,15 @@ export function IDE() {
     try {
       const l = localStorage.getItem("labbench.langs");
       if (l) setAddedLangs(JSON.parse(l));
-      const raw = localStorage.getItem("labbench.aiCredits");
-      const next = raw ? normalizeCredits(JSON.parse(raw)) : { date: today(), credits: DAILY_CREDITS };
-      const current = next.date === today() ? next : { date: today(), credits: DAILY_CREDITS };
-      setCredits(current);
-      localStorage.setItem("labbench.aiCredits", JSON.stringify(current));
+      const c = localStorage.getItem("labbench.aiCredits");
+      if (c) {
+        const parsed = JSON.parse(c);
+        const next = parsed && parsed.date === today() ? parsed : { date: today(), used: 0 };
+        setCredits(next);
+      }
       setInkSaver(localStorage.getItem("labbench.ink") === "1");
     } catch {
-      const current = { date: today(), credits: DAILY_CREDITS };
-      setCredits(current);
-      localStorage.setItem("labbench.aiCredits", JSON.stringify(current));
+      setCredits({ date: today(), used: 0 });
     }
   }, []);
   useEffect(() => {
@@ -721,8 +732,6 @@ export function IDE() {
   };
   const uploadToDrive = async () => {
     setMore(false);
-
-    // Check if student is signed in
     if (!userEmail) {
       if (confirm("You need to sign in with Google to upload files to your Google Drive. Sign in now?")) {
         await googleSignIn();
@@ -734,15 +743,12 @@ export function IDE() {
     flash("Capturing screenshot and uploading to your Google Drive...");
 
     try {
-      // 1. Capture the 16:9 output snapshot
       let shot: string | null = null;
       try {
         shot = await snapshot(1.5);
       } catch (err) {
         console.warn("Could not capture screenshot:", err);
       }
-
-      // 2. Upload only active folder's code + screenshot to My Drive/output/
       const result = await uploadWorkspaceToGoogleDrive({
         files: folderFiles(),
         screenshotDataUrl: shot,
@@ -817,10 +823,14 @@ export function IDE() {
 
   // ---------- AI TA ----------
   const askTa = async () => {
-    const c = credits.date === today() ? credits : { date: today(), credits: DAILY_CREDITS };
-    if (c.credits <= 0) {
-      setShowUpgrade(true);
-      return;
+    if (hasActivePro) {
+      // Pro users: unlimited AI TA access until the end of the current month.
+    } else {
+      const c = credits.date === today() ? credits : { date: today(), used: 0 };
+      if (c.used >= DAILY_CREDITS) {
+        setShowUpgrade(true);
+        return;
+      }
     }
     const lr = lastRun.current;
     if (!lr) return;
@@ -834,8 +844,8 @@ export function IDE() {
         },
       });
       if (r.ok) {
-        if (!r.fallback) {
-          const next = { date: today(), credits: Math.max(0, c.credits - 1) };
+        if (!r.fallback && !hasActivePro) {
+          const next = { date: today(), used: credits.date === today() ? credits.used + 1 : 1 };
           setCredits(next);
           localStorage.setItem("labbench.aiCredits", JSON.stringify(next));
         }
@@ -869,11 +879,11 @@ export function IDE() {
   return (
     <div className="flex h-[100dvh] flex-col bg-background text-foreground">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-rail px-3 md:hidden">
-        <Button
-          variant="ghost"
-          size="icon"
-          title="Open navigation"
-          aria-label="Open navigation"
+        <Button 
+          variant="ghost" 
+          size="icon" 
+          title="Open navigation" 
+          aria-label="Open navigation" 
           onClick={() => setDrawer(true)}
         >
           <Menu />
@@ -886,7 +896,6 @@ export function IDE() {
         </Button>
       </header>
       <div className="flex min-h-0 flex-1">
-        {/* Sidebar */}
         {drawer && (
           <div
             className="fixed inset-0 z-40 bg-background/70 md:hidden"
@@ -1036,7 +1045,7 @@ export function IDE() {
               <UserRound size={15} />
               <span className="min-w-0 flex-1 truncate">{userEmail || "Guest student"}</span>
               <span>
-                {creditsLeft}/{DAILY_CREDITS} hints
+                {hasActivePro ? "Unlimited" : `${Math.max(0, DAILY_CREDITS - credits.used)}/${DAILY_CREDITS} hints`}
               </span>
             </div>
             {userEmail ? (
@@ -1068,7 +1077,6 @@ export function IDE() {
           className="flex min-w-0 flex-1 flex-col-reverse md:flex-row"
           style={{ ["--split" as string]: `${split}%` }}
         >
-          {/* Editor */}
           <section className="flex h-[52%] min-h-0 min-w-0 flex-col bg-editor md:h-auto md:w-[var(--split)] md:shrink-0">
             <div className="flex h-9 items-stretch border-b bg-panel">
               <select
@@ -1151,7 +1159,6 @@ export function IDE() {
             className="hidden w-1 shrink-0 cursor-col-resize bg-border hover:bg-primary md:block"
           />
 
-          {/* Output */}
           <section className="flex h-[48%] min-h-0 min-w-0 flex-col border-b bg-panel md:h-auto md:flex-1 md:border-b-0">
             <div className="relative flex h-11 shrink-0 items-center gap-1 border-b px-2">
               <Button
@@ -1275,7 +1282,7 @@ export function IDE() {
                     <div className="flex-1">
                       <div className="text-sm font-semibold">AI Teaching Assistant</div>
                       <div className="text-[10px] text-muted-foreground">
-                        Explains the concept — you write the fix · {creditsLeft} credits left today
+                        Explains the concept — you write the fix · {hasActivePro ? "Unlimited" : `${Math.max(0, DAILY_CREDITS - credits.used)} credits left today`}
                       </div>
                     </div>
                     <button
@@ -1392,7 +1399,14 @@ export function IDE() {
       <ProModal
         open={showUpgrade}
         onClose={() => setShowUpgrade(false)}
-        onSuccess={() => flash("Payment successful! Welcome to LabBench Pro.")}
+        onSuccess={() => {
+          if (!userEmail) return;
+          const email = userEmail.trim().toLowerCase();
+          const next = { email, purchasedAt: new Date().toISOString() };
+          saveSubscriptionForEmail(email, next);
+          setProSubscription(next);
+          localStorage.setItem("labbench.proPurchaseEmail", email);
+        }}
         userEmail={userEmail}
       />
       <WalkthroughTour forceOpen={showTour} onClose={() => setShowTour(false)} />
@@ -1459,7 +1473,6 @@ export function IDE() {
 let _pyUrl: string | null = null;
 function pyWorkerUrl() {
   if (_pyUrl) return _pyUrl;
-  // Load via a blob so the worker inherits the page's isolation (needed for live input)
   const xhr = new XMLHttpRequest();
   xhr.open("GET", "/python-worker.js", false);
   xhr.send();
@@ -1470,3 +1483,4 @@ function pyWorkerUrl() {
 function prompt_(msg: string, def?: string) {
   return window.prompt(msg, def);
 }
+
