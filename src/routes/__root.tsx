@@ -151,7 +151,7 @@ function RootShell({ children }: { children: ReactNode }) {
         />
       </head>
       {/* Remove overflow-hidden or fixed heights from body */}
-      <body className="flex min-h-screen bg-background text-foreground antialiased flex-col">
+      <body className="flex min-h-screen overflow-y-auto bg-background text-foreground antialiased flex-col">
         {children}
         <Scripts />
       </body>
@@ -166,9 +166,11 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       <div className="flex min-h-screen flex-col flex-1">
         {/* main container must allow contents to define page height */}
-        <Outlet />
+        <main className="flex-1 w-full">
+          <Outlet />
+          <Footer />
+        </main>
       </div>
-      <Footer />
       <CookieBanner />
     </QueryClientProvider>
   );
