@@ -1,5 +1,4 @@
 User-agent: *
 Allow: /
-Disallow: /api/
 
-Sitemap: https://labbench.app/sitemap.xml
+Sitemap: https://labbench-woad.vercel.app/sitemap.xml
