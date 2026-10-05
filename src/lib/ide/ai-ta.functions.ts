@@ -31,7 +31,7 @@ function configuredProviders(): Provider[] {
       name: "OpenRouter",
       endpoint: "https://openrouter.ai/api/v1/chat/completions",
       key: openRouterKey,
-      model: process.env["OPENROUTER_MODEL"] || "openrouter/free",
+      model: process.env["OPENROUTER_MODEL"] || "openrouter/auto:free",
     });
   }
   return providers;
