@@ -1,0 +1,1 @@
+ALTER TABLE public.shared_workspaces ADD COLUMN IF NOT EXISTS image text;
