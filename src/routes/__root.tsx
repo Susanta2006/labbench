@@ -18,10 +18,15 @@ const applicationStructuredData = {
   "@context": "https://schema.org",
   "@type": ["SoftwareApplication", "WebApplication"],
   name: "LabBench",
-  url: "https://labbench.app",
+  url: "https://labbench-woad.vercel.app",
   description:
     "Free online code editor and compiler for C, C++, Java, Python, and Web development. Designed for college students to run code, save output screenshots, and get AI error explanations.",
   applicationCategory: "DeveloperApplication",
+  founder: {
+          "@type": "Person",
+          "name": "Susanta Banik",
+          "url":  "https://susanta-banik.vercel.app",
+        }, 
   operatingSystem: "All",
   featureList: [
     "Online code editor and compiler for C, C++, Java, Python, and Web development",
@@ -31,7 +36,7 @@ const applicationStructuredData = {
   offers: {
     "@type": "Offer",
     price: "0",
-    priceCurrency: "USD",
+    priceCurrency: "INR",
   },
 };
 
@@ -105,6 +110,14 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         name: "description",
         content:
           "Free online code editor and compiler for C, C++, Java, Python, and Web development. Designed for college students to run code, save output screenshots, and get AI error explanations.",
+      },
+      {
+        name: "google-site-verification",
+        content: "8o9Dm94uzc3XtGBMijfLCeGXH8k0MQgKiY1eZskSbjE",
+      }, 
+      {
+        name: "Developer",
+        content: "Susanta Banik",
       },
       { name: "theme-color", content: "#09090b" },
     ],
