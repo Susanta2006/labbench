@@ -4,6 +4,26 @@ LabBench is a browser-based coding workspace for students. It combines a
 Monaco-powered editor, a file explorer, interactive terminal, web preview, and
 tools for sharing and exporting lab work.
 
+## The problem behind LabBench
+
+I built LabBench around a familiar computer-lab experience: students can lose
+valuable time to restrictions and disconnected tools instead of learning and
+finishing their practical work. Lab PCs may not allow software installation or
+personal sign-ins, and their local files may not be available after a session.
+Meanwhile, practical submissions often need clear output screenshots, which
+students otherwise have to capture, clean up, and move between devices by hand.
+
+Debugging creates another challenge. A tool that simply supplies finished code
+can get a student past an error without helping them understand it. And when a
+whole lab depends on account verification, simultaneous sign-ins can add
+avoidable friction.
+
+LabBench addresses these problems by making the coding workspace available
+without an account, keeping working files in the browser, offering report-ready
+output captures, and using AI to explain errors with hints rather than corrected
+solutions. Optional account-based services, such as Google Drive uploads, stay
+separate from the core editor.
+
 ## Features
 
 - **Multi-language workspaces:** Start with HTML/CSS/JavaScript, React, Python,
@@ -23,6 +43,56 @@ tools for sharing and exporting lab work.
 Execution methods vary by language: web projects are previewed in the browser,
 Python and Node.js use browser workers, and several compiled languages use an
 online compiler service.
+
+## How the architecture solves it
+
+```text
+                   ┌────────────────────────────────────────┐
+                   │ LabBench web app                       │
+                   │ React + TanStack Start + Monaco Editor │
+                   └───────────────────┬────────────────────┘
+                                       │
+       ┌───────────────────────────────┼───────────────────────────────┐
+       ▼                               ▼                               ▼
+┌─────────────────────┐     ┌──────────────────────┐       ┌─────────────────────┐
+│ Edit, run, capture  │     │ Temporary sharing   │       │ AI Teaching         │
+│ in the browser      │     │ via QR/link          │       │ Assistant           │
+├─────────────────────┤     ├──────────────────────┤       ├─────────────────────┤
+│ Monaco + local      │     │ Server function +    │       │ Server function +   │
+│ storage             │     │ Supabase table       │       │ Gemini API          │
+│ Web Workers /       │     │ 24-hour expiry       │       │ Guided explanations │
+│ compiler service    │     │ Browser-made ZIP     │       │ No corrected code   │
+│ PNG output capture  │     └──────────────────────┘       └─────────────────────┘
+└─────────────────────┘
+```
+
+1. **Work without an account:** The React app is served with TanStack Start.
+   Monaco provides the editor, and workspace files are autosaved in browser
+   `localStorage`. A student can open the editor and work without first signing
+   in or requesting an email verification code.
+2. **Run code where it makes sense:** Web and React projects are previewed in
+   the browser. Python and Node.js run in browser workers; supported compiled
+   languages are sent through a server function to the Wandbox online compiler
+   service. The interactive terminal handles program output and input.
+3. **Make output submission-ready:** LabBench captures the terminal or web
+   preview as a PNG in the browser. The “Save Ink” option switches terminal
+   output to a white background with dark text. Students can download the image
+   or include it when sharing a workspace.
+4. **Explain errors without writing the answer:** A server function validates
+   the language, code, and output before sending them to the configured Gemini
+   API model. Its teaching-assistant instructions ask for a short explanation
+   and hint, not corrected code; code blocks in the response are stripped as an
+   extra safeguard. The model can be configured with `GEMINI_MODEL`.
+5. **Beam work to a phone:** LabBench creates a temporary share record through
+   a server function and displays its link as a QR code. The random link ID is
+   the access capability; reads reject expired links, which are set to expire
+   after 24 hours. The recipient can inspect the shared files, output, and
+   screenshot, then generate and download a ZIP in their own browser. This flow
+   does not require a public file-storage bucket or an account for the guest.
+6. **Keep sign-in optional:** Google OAuth is used only for optional uploads to
+   the student's Google Drive. Core editing, running, capturing, and temporary
+   sharing do not require that sign-in, avoiding account-verification traffic
+   as a prerequisite for a lab session.
 
 ## Requirements
 
