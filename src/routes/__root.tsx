@@ -150,7 +150,8 @@ function RootShell({ children }: { children: ReactNode }) {
           dangerouslySetInnerHTML={{ __html: JSON.stringify(applicationStructuredData) }}
         />
       </head>
-      <body>
+      {/* Remove overflow-hidden or fixed heights from body */}
+      <body className="min-h-screen bg-background text-foreground antialiased flex flex-col">
         {children}
         <Scripts />
       </body>
@@ -163,9 +164,9 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="flex min-h-screen flex-col">
-        {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-        <main className="flex-1">
+      <div className="flex min-h-screen flex-col flex-1">
+        {/* main container must allow contents to define page height */}
+        <main className="flex-1 w-full">
           <Outlet />
         </main>
         <Footer />
