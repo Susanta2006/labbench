@@ -167,8 +167,8 @@ function RootComponent() {
       <div className="flex min-h-screen flex-col flex-1">
         {/* main container must allow contents to define page height */}
         <Outlet />
-        <Footer />
       </div>
+      <Footer />
       <CookieBanner />
     </QueryClientProvider>
   );
