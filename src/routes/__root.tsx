@@ -145,14 +145,13 @@ function RootShell({ children }: { children: ReactNode }) {
     <html lang="en">
       <head>
         <HeadContent />
+      </head>
+      <body className="flex min-h-screen overflow-y-auto bg-background text-foreground antialiased flex-col">
+        {children}
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(applicationStructuredData) }}
         />
-      </head>
-      {/* Remove overflow-hidden or fixed heights from body */}
-      <body className="flex min-h-screen overflow-y-auto bg-background text-foreground antialiased flex-col">
-        {children}
         <Scripts />
       </body>
     </html>
@@ -165,7 +164,6 @@ function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
       <div className="flex min-h-screen flex-col flex-1">
-        {/* main container must allow contents to define page height */}
         <main className="flex-1 w-full [&>div]:max-md:h-auto [&>div]:max-md:min-h-screen">
           <Outlet />
           <Footer />
