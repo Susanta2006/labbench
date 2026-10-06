@@ -307,7 +307,7 @@ export function IDE() {
 
   const spawnPython = useCallback(() => {
     pyWorker.current?.terminate();
-    const w = new Worker(pyWorkerUrl());
+    const w = new Worker(pyWorkerUrl(), { type: "module" });
     sab.current =
       typeof SharedArrayBuffer !== "undefined" && self.crossOriginIsolated
         ? new SharedArrayBuffer(8 + 65536)
