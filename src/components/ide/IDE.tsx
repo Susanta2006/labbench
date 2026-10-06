@@ -380,7 +380,7 @@ export function IDE() {
 
   const runNode = (code: string) => {
     nodeWorker.current?.terminate();
-    const w = new Worker(URL.createObjectURL(new Blob([NODE_WORKER], { type: "text/javascript" })));
+    const w = new Worker(URL.createObjectURL(new Blob([NODE_WORKER], { type: "application/javascript" })), { type: "module" });
     nodeWorker.current = w;
     w.onmessage = (e) => {
       const m = e.data;
