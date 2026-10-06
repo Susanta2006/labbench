@@ -11,7 +11,7 @@ export function Footer() {
             © {currentYear} LabBench. All rights reserved.
           </p>
           <p className="text-[11px] text-muted-foreground">
-            Empowering students with real-time AI lab assistance.
+            Empowering students with real-time IDE & AI lab assistance.
           </p>
         </div>
 
