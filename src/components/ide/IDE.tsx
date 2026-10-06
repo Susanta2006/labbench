@@ -1470,17 +1470,16 @@ export function IDE() {
   );
 }
 
-let _pyUrl: string | null = null;
 function pyWorkerUrl() {
-  if (_pyUrl) return _pyUrl;
-  const xhr = new XMLHttpRequest();
-  xhr.open("GET", "/python-worker.js", false);
-  xhr.send();
-  _pyUrl = URL.createObjectURL(new Blob([xhr.responseText], { type: "text/javascript" }));
-  return _pyUrl;
+  const code = `
+    let sab = null;
+    onmessage = async (e) => {
+      const m = e.data;
+      if (m.type === 'init') {
+        sab = m.sab;
+        postMessage({ type: 'status', text: 'Initializing Python...' });
+      }
+    };
+  `;
+  return URL.createObjectURL(new Blob([code], { type: "application/javascript" }));
 }
-
-function prompt_(msg: string, def?: string) {
-  return window.prompt(msg, def);
-}
-
