@@ -70,26 +70,34 @@ const today = () => new Date().toISOString().slice(0, 10);
 function buildPreview(lang: Language, files: Record<string, string>) {
   const inFolder = (n: string) => files[`${lang.id}/${n}`];
   if (lang.kind === "react") {
-    const jsx = Object.keys(files)
+    let jsx = Object.keys(files)
       .filter((p) => p.startsWith("react/") && p.endsWith(".jsx"))
       .map((p) => files[p])
       .join("\n");
+    
+    // Strip top-level React / ReactDOM import statements since React & ReactDOM 
+    // are loaded via global UMD CDN links in the preview window
+    jsx = jsx.replace(/^\s*import\s+.*?;?\s*$/gm, "");
+
     const css = Object.keys(files)
       .filter((p) => p.startsWith("react/") && p.endsWith(".css"))
       .map((p) => files[p])
       .join("\n");
     return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${css}</style>
-<script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
-<script src="https://cdn.tailwindcss.com"></script></head><body><div id="root"></div>
-<script>window.onerror=(m)=>{document.body.insertAdjacentHTML('beforeend','<pre style="color:#b00020;padding:12px">'+m+'</pre>')}</script>
-<script type="text/babel" data-presets="react,env">${jsx.replace(/import\s+.*?\s+from\s+['"].*?['"];?/g, "").replace(/export\s+default\s+/g, "").replace(/<\/script>/g, "<\\/script>")}</script></body></html>`;
+ <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+ <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+ <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+ <script src="https://cdn.tailwindcss.com"></script></head><body><div id="root"></div>
+ <script>window.onerror=(m)=>{document.body.insertAdjacentHTML('beforeend','<pre style="color:#b00020;padding:12px">'+m+'</pre>')}</script>
+ <script type="text/babel" data-presets="react">${jsx.replace(/<\/script>/g, "<\\/script>")}</script></body></html>`;
   }
+
   let html = inFolder(lang.entry) ?? "<h1>No index.html</h1>";
   html = html.replace(/<link[^>]*href=["']([^"']+)["'][^>]*>/g, (m, href) =>
     inFolder(href) !== undefined ? `<style>${inFolder(href)}</style>` : m,
   );
+  
+  // Preserve script attributes (e.g. type="module") when inlining local script files
   html = html.replace(/<script([^>]*)src=["']([^"']+)["']([^>]*)><\/script>/g, (m, a, src) =>
     inFolder(src) !== undefined
       ? `<script${a}>${inFolder(src)!.replace(/<\/script>/g, "<\\/script>")}</script>`
