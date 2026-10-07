@@ -24,6 +24,11 @@ const applicationStructuredData = {
     "Free online code editor and compiler for C, C++, Java, Python, and Web development. Designed for college students to run code, save output screenshots, and get AI error explanations.",
   applicationCategory: "DeveloperApplication",
   operatingSystem: "All",
+  founder: {
+    "@type": "Person",
+    name: "Susanta Banik",
+    url: "https://susanta-banik.vercel.app",
+  },
   featureList: [
     "Online code editor and compiler for C, C++, Java, Python, and Web development",
     "Save code output screenshots for lab reports",
@@ -108,6 +113,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
           "Free online code editor and compiler for C, C++, Java, Python, and Web development. Designed for college students to run code, save output screenshots, and get AI error explanations.",
       },
       { name: "theme-color", content: "#09090b" },
+      {
+        name: "google-site-verification",
+        content: "8o9Dm94uzc3XtGBMijfLCeGXH8k0MQgKiY1eZskSbjE",
+      },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
