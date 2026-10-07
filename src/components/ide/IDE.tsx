@@ -51,81 +51,128 @@ import { askAiTa } from "@/lib/ide/ai-ta.functions";
 import { formatCode } from "@/lib/ide/format";
 import { runShell } from "@/lib/ide/shell";
 import { Terminal, type TerminalHandle } from "./Terminal";
-import { uploadWorkspaceToGoogleDrive } from "@/lib/ide/google-drive";
+import {
+  syncWorkspaceWithGoogleDrive,
+  uploadWorkspaceToGoogleDrive,
+} from "@/lib/ide/google-drive";
 import { ProModal } from "./ProModal";
 import { WalkthroughTour } from "./WalkthroughTour";
-import {
-  isSubscriptionActive,
-  loadSubscriptionForEmail,
-  saveSubscriptionForEmail,
-  type SubscriptionData,
-} from "@/lib/ide/subscription.tsx";
 
 type Status = "idle" | "running" | "done" | "error" | "stopped";
+type InstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+};
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
 const DAILY_CREDITS = 5;
 const today = () => new Date().toISOString().slice(0, 10);
+const PREVIEW_BRIDGE = `<script>
+(() => {
+  const format = (value) => {
+    if (typeof value === "string") return value;
+    try { return JSON.stringify(value); } catch { return String(value); }
+  };
+  const report = (level, values) => parent.postMessage({
+    source: "labbench-preview", level,
+    text: values.map(format).join(" ")
+  }, "*");
+  ["log", "info", "warn", "error"].forEach((level) => {
+    const original = console[level].bind(console);
+    console[level] = (...values) => {
+      original(...values);
+      report(level, values);
+    };
+  });
+  addEventListener("error", (event) => report("error", [event.message || "Preview runtime error"]));
+  addEventListener("unhandledrejection", (event) => report("error", [event.reason]));
+})();
+</script>`;
+
+function buildAiCode(lang: Language, path: string, files: Record<string, string>) {
+  if (lang.kind === "web" || lang.kind === "react") {
+    return Object.entries(files)
+      .filter(([file]) => file.startsWith(`${lang.id}/`) && !file.endsWith(".keep"))
+      .map(([file, code]) => `// ${file}\n${code}`)
+      .join("\n\n");
+  }
+  return files[path] ?? "";
+}
 
 function buildPreview(lang: Language, files: Record<string, string>) {
   const inFolder = (n: string) => files[`${lang.id}/${n}`];
   if (lang.kind === "react") {
-    let jsx = Object.keys(files)
+    const source = Object.keys(files)
       .filter((p) => p.startsWith("react/") && p.endsWith(".jsx"))
       .map((p) => files[p])
       .join("\n");
-    
-    // Strip top-level React / ReactDOM import statements since React & ReactDOM 
-    // are loaded via global UMD CDN links in the preview window
-    jsx = jsx.replace(/^\s*import\s+.*?;?\s*$/gm, "");
-
+    // These files run as one Babel script, so resolve React imports against the UMD globals
+    // and remove module boundaries that cannot exist in the combined preview.
+    const jsx = source
+      .replace(
+        /^\s*import\s+(?:([\s\S]*?)\s+from\s+)?(["'])([^"']+)\2\s*;?\s*$/gm,
+        (_statement, clause: string | undefined, _quote: string, moduleName: string) => {
+          if (moduleName === "react" || moduleName === "react-dom" || moduleName === "react-dom/client") {
+            const globalName = moduleName === "react" ? "React" : "ReactDOM";
+            const bindings = clause?.trim();
+            if (!bindings) return "";
+            const defaultBinding = bindings.match(/^([\w$]+)(?=\s*(?:,|$))/)?.[1];
+            const namespaceBinding = bindings.match(/\*\s+as\s+([\w$]+)/)?.[1];
+            const namedBindings = bindings.match(/\{([\s\S]*?)\}/)?.[1];
+            const lines: string[] = [];
+            if (defaultBinding) lines.push(`const ${defaultBinding} = window.${globalName};`);
+            if (namespaceBinding) lines.push(`const ${namespaceBinding} = window.${globalName};`);
+            if (namedBindings) {
+              const properties = namedBindings.replace(/\b([\w$]+)\s+as\s+([\w$]+)\b/g, "$1: $2");
+              lines.push(`const {${properties}} = window.${globalName};`);
+            }
+            return lines.join("\n");
+          }
+          // Local JSX/CSS is combined below; other packages are unavailable in this browser preview.
+          return "";
+        },
+      )
+      .replace(/^\s*export\s+\*\s*(?:as\s+[\w$]+\s*)?from\s+["'][^"']+["']\s*;?\s*$/gm, "")
+      .replace(/^\s*export\s+default\s+/gm, "")
+      .replace(/^\s*export\s+(?=(?:async\s+)?(?:function|class|const|let|var)\b)/gm, "")
+      .replace(/^\s*export\s*\{[^}]*\}(?:\s+from\s+["'][^"']+["'])?\s*;?\s*$/gm, "");
     const css = Object.keys(files)
       .filter((p) => p.startsWith("react/") && p.endsWith(".css"))
       .map((p) => files[p])
       .join("\n");
     return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${css}</style>
- <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
- <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
- <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
- <script src="https://cdn.tailwindcss.com"></script></head><body><div id="root"></div>
- <script>window.onerror=(m)=>{document.body.insertAdjacentHTML('beforeend','<pre style="color:#b00020;padding:12px">'+m+'</pre>')}</script>
- <script type="text/babel" data-presets="react">${jsx.replace(/<\/script>/g, "<\\/script>")}</script></body></html>`;
+<script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+<script src="https://cdn.tailwindcss.com"></script>${PREVIEW_BRIDGE}</head><body><div id="root"></div>
+<script>window.onerror=(m)=>{document.body.insertAdjacentHTML('beforeend','<pre style="color:#b00020;padding:12px">'+m+'</pre>')}</script>
+<script>Babel.registerPreset("labbench-react", {presets: [[Babel.availablePresets.react, {runtime: "classic"}]]});</script>
+<script type="text/babel" data-type="module" data-presets="labbench-react">${jsx.replace(/<\/script>/g, "<\\/script>")}</script></body></html>`;
   }
-
   let html = inFolder(lang.entry) ?? "<h1>No index.html</h1>";
   html = html.replace(/<link[^>]*href=["']([^"']+)["'][^>]*>/g, (m, href) =>
     inFolder(href) !== undefined ? `<style>${inFolder(href)}</style>` : m,
   );
-  
-  // Preserve script attributes (e.g. type="module") when inlining local script files
   html = html.replace(/<script([^>]*)src=["']([^"']+)["']([^>]*)><\/script>/g, (m, a, src) =>
     inFolder(src) !== undefined
       ? `<script${a}>${inFolder(src)!.replace(/<\/script>/g, "<\\/script>")}</script>`
       : m,
   );
+  if (/<head(?:\s[^>]*)?>/i.test(html)) html = html.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}${PREVIEW_BRIDGE}`);
+  else html = html.replace(/<body(?:\s[^>]*)?>/i, (body) => `${PREVIEW_BRIDGE}${body}`);
   return html;
 }
 
 const NODE_WORKER = `
 const fmt = a => a.map(x => typeof x === 'string' ? x : (()=>{try{return JSON.stringify(x,null,2)}catch{return String(x)}})()).join(' ');
-console.log = (...a) => postMessage({type:'out', text: fmt(a)+'\n'});
+console.log = (...a) => postMessage({type:'out', text: fmt(a)+'\\n'});
 console.info = console.log;
-console.error = console.warn = (...a) => postMessage({type:'err', text: fmt(a)+'\n'});
-onmessage = async e => {
-  try {
-    const blob = new Blob([e.data], { type: 'application/javascript' });
-    const url = URL.createObjectURL(blob);
-    await import(url);
-    URL.revokeObjectURL(url);
-    postMessage({type:'done',code:0});
-  } catch(err) {
-    postMessage({type:'err', text: String(err && err.stack || err)+'\n'});
-    postMessage({type:'done',code:1});
-  }
-};`;
+console.error = console.warn = (...a) => postMessage({type:'err', text: fmt(a)+'\\n'});
+onmessage = async e => { try { await (new Function('return (async()=>{'+e.data+'\\n})()'))(); postMessage({type:'done',code:0}); }
+ catch(err){ postMessage({type:'err', text: String(err && err.stack || err)+'\\n'}); postMessage({type:'done',code:1}); } };`;
 
 export function IDE() {
-  const { files, setFiles, saved, saveNow } = useWorkspace();
+  const { files, setFiles, saved, saveNow, loaded, updatedAt, setUpdatedAt } = useWorkspace();
   const [langId, setLangId] = useState("python");
   const [active, setActive] = useState("python/main.py");
   const [tabs, setTabs] = useState<string[]>(["python/main.py"]);
@@ -148,7 +195,6 @@ export function IDE() {
     error: "",
   });
   const [credits, setCredits] = useState({ date: today(), used: 0 });
-  const [proSubscription, setProSubscription] = useState<SubscriptionData | null>(null);
   const [showUpgrade, setShowUpgrade] = useState(false);
   const [showTour, setShowTour] = useState(false);
   const [drawer, setDrawer] = useState(false);
@@ -156,17 +202,24 @@ export function IDE() {
   const [shareUrl, setShareUrl] = useState("");
   const [sharing, setSharing] = useState(false);
   const [userEmail, setUserEmail] = useState("");
+  const [driveToken, setDriveToken] = useState<string | null>(null);
+  const [driveSyncState, setDriveSyncState] = useState<"disconnected" | "syncing" | "synced" | "error">("disconnected");
   const [uploadingDrive, setUploadingDrive] = useState(false);
   const [driveUrl, setDriveUrl] = useState<string | null>(null);
+  const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
 
   const term = useRef<TerminalHandle>(null);
   const pyWorker = useRef<Worker | null>(null);
   const sab = useRef<SharedArrayBuffer | null>(null);
   const nodeWorker = useRef<Worker | null>(null);
   const captureRef = useRef<HTMLDivElement>(null);
+  const previewFrame = useRef<HTMLIFrameElement>(null);
   const abortRef = useRef(false);
   const doneRef = useRef<(() => void) | null>(null);
   const outputLog = useRef("");
+  const driveSyncQueue = useRef<Promise<void>>(Promise.resolve());
+  const updatedAtRef = useRef(updatedAt);
+  updatedAtRef.current = updatedAt;
   const lastRun = useRef<{ path: string; lang: string; code: string } | null>(null);
   const cwdRef = useRef("python");
   const shellHistory = useRef<string[]>([]);
@@ -176,29 +229,32 @@ export function IDE() {
   const askAiFn = useServerFn(askAiTa);
   const createShareFn = useServerFn(createShare);
   useEffect(() => {
-    void supabase.auth.getUser().then(({ data }) => setUserEmail(data.user?.email ?? ""));
+    void supabase.auth.getSession().then(({ data }) => {
+      setUserEmail(data.session?.user.email ?? "");
+      setDriveToken(data.session?.provider_token ?? null);
+    });
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) =>
-      setUserEmail(session?.user.email ?? ""),
-    );
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUserEmail(session?.user.email ?? "");
+      setDriveToken(session?.provider_token ?? null);
+    });
     return () => subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
-    if (!userEmail) {
-      setProSubscription(null);
-      return;
-    }
-    const currentEmail = userEmail.trim().toLowerCase();
-    const sync = () => setProSubscription(loadSubscriptionForEmail(currentEmail));
-    sync();
-    const onStorage = (event: StorageEvent) => {
-      if (event.key === null || event.key === `labbench.pro.${currentEmail}`) sync();
+    const beforeInstall = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as InstallPromptEvent);
     };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, [userEmail]);
+    const installed = () => setInstallPrompt(null);
+    window.addEventListener("beforeinstallprompt", beforeInstall);
+    window.addEventListener("appinstalled", installed);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", beforeInstall);
+      window.removeEventListener("appinstalled", installed);
+    };
+  }, []);
 
   const filesRef = useRef(files);
   filesRef.current = files;
@@ -218,28 +274,126 @@ export function IDE() {
     }
     const top = active.split("/")[0];
     const l = (top && langById(top)) || langForPath(active);
+    const directory = active.slice(0, active.lastIndexOf("/"));
+    if (directory) cwdRef.current = directory;
+    if (l) setOpenFolders((folders) => ({ ...folders, [l.id]: true }));
     if (l && l.id !== langId) {
       setLangId(l.id);
-      cwdRef.current = l.id;
     }
+    if (shellWaiting.current && term.current?.isReady()) {
+      term.current.write(`\r\n${prompt()}`);
+    }
+    setFailed(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
   const isWeb = activeLang.kind === "web" || activeLang.kind === "react";
-  const hasActivePro = !!userEmail && isSubscriptionActive(proSubscription);
-  const creditsLeft = hasActivePro ? Number.POSITIVE_INFINITY : credits.date === today() ? DAILY_CREDITS - credits.used : DAILY_CREDITS;
+  const creditsLeft = credits.date === today() ? DAILY_CREDITS - credits.used : DAILY_CREDITS;
 
-  const flash = (m: string, folderUrl: string | null = null) => {
+  const flash = (m: string, folderUrl: string | null = null, duration = 2500) => {
     setToast(m);
     setDriveUrl(folderUrl);
     setTimeout(() => {
       setToast("");
       setDriveUrl(null);
-    }, 2500);
+    }, duration);
+  };
+  const installApp = async () => {
+    setMore(false);
+    const isInstalled = window.matchMedia("(display-mode: standalone)").matches ||
+      (navigator as Navigator & { standalone?: boolean }).standalone === true;
+    if (isInstalled) {
+      flash("LabBench is already installed.", null, 5000);
+      return;
+    }
+    if (installPrompt) {
+      await installPrompt.prompt();
+      const choice = await installPrompt.userChoice;
+      setInstallPrompt(null);
+      flash(choice.outcome === "accepted" ? "LabBench installed." : "Installation dismissed.", null, 5000);
+      return;
+    }
+    const isAppleMobile = /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    flash(
+      isAppleMobile
+        ? "In Safari, tap Share, then choose Add to Home Screen."
+        : "In your browser menu, choose Install LabBench or Add to desktop.",
+      null,
+      7000,
+    );
   };
   const write = (s: string) => {
     outputLog.current += s;
     term.current?.write(s);
   };
+
+  const performDriveSync = useCallback(() => {
+    if (!userEmail || !driveToken || !loaded || !saved) return Promise.resolve();
+    const task = driveSyncQueue.current.then(async () => {
+      setDriveSyncState("syncing");
+      const result = await syncWorkspaceWithGoogleDrive(
+        driveToken,
+        filesRef.current,
+        updatedAtRef.current,
+      );
+      if (!result.ok) {
+        setDriveSyncState("error");
+        return;
+      }
+      if (result.updatedAt) {
+        updatedAtRef.current = result.updatedAt;
+        localStorage.setItem("labbench.workspace.updatedAt", result.updatedAt);
+        setUpdatedAt(result.updatedAt);
+      }
+      if (result.action === "pulled" && result.files) {
+        filesRef.current = result.files;
+        setFiles(result.files);
+      }
+      setDriveSyncState("synced");
+    });
+    driveSyncQueue.current = task.catch(() => {
+      setDriveSyncState("error");
+    });
+    return task;
+  }, [userEmail, driveToken, loaded, saved, setFiles, setUpdatedAt]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    if (!userEmail || !driveToken) {
+      setDriveSyncState("disconnected");
+      return;
+    }
+    const timer = setTimeout(() => void performDriveSync(), 1800);
+    return () => clearTimeout(timer);
+  }, [files, loaded, userEmail, driveToken, updatedAt, performDriveSync]);
+
+  useEffect(() => {
+    if (!loaded || !userEmail || !driveToken) return;
+    const syncWhenVisible = () => {
+      if (document.visibilityState === "visible") void performDriveSync();
+    };
+    window.addEventListener("focus", syncWhenVisible);
+    document.addEventListener("visibilitychange", syncWhenVisible);
+    const interval = window.setInterval(syncWhenVisible, 30_000);
+    return () => {
+      window.removeEventListener("focus", syncWhenVisible);
+      document.removeEventListener("visibilitychange", syncWhenVisible);
+      window.clearInterval(interval);
+    };
+  }, [loaded, userEmail, driveToken, performDriveSync]);
+
+  useEffect(() => {
+    const onPreviewMessage = (event: MessageEvent) => {
+      if (event.source !== previewFrame.current?.contentWindow) return;
+      const message = event.data as { source?: string; level?: string; text?: string } | null;
+      if (message?.source !== "labbench-preview" || typeof message.text !== "string") return;
+      const line = `[preview ${message.level ?? "log"}] ${message.text}\n`;
+      outputLog.current = (outputLog.current + line).slice(-16_000);
+      if (message.level === "error") setFailed(true);
+    };
+    window.addEventListener("message", onPreviewMessage);
+    return () => window.removeEventListener("message", onPreviewMessage);
+  }, []);
 
   // Persisted prefs
   useEffect(() => {
@@ -247,14 +401,10 @@ export function IDE() {
       const l = localStorage.getItem("labbench.langs");
       if (l) setAddedLangs(JSON.parse(l));
       const c = localStorage.getItem("labbench.aiCredits");
-      if (c) {
-        const parsed = JSON.parse(c);
-        const next = parsed && parsed.date === today() ? parsed : { date: today(), used: 0 };
-        setCredits(next);
-      }
+      if (c) setCredits(JSON.parse(c));
       setInkSaver(localStorage.getItem("labbench.ink") === "1");
     } catch {
-      setCredits({ date: today(), used: 0 });
+      /* */
     }
   }, []);
   useEffect(() => {
@@ -263,7 +413,13 @@ export function IDE() {
 
   useEffect(() => {
     if (!isWeb) return;
-    const t = setTimeout(() => setPreviewDoc(buildPreview(activeLang, files)), 400);
+    const t = setTimeout(() => {
+      const path = activeRef.current;
+      outputLog.current = "";
+      lastRun.current = { path, lang: activeLang.label, code: buildAiCode(activeLang, path, files) };
+      setFailed(false);
+      setPreviewDoc(buildPreview(activeLang, files));
+    }, 400);
     return () => clearTimeout(t);
   }, [files, isWeb, activeLang]);
   useEffect(() => {
@@ -273,6 +429,10 @@ export function IDE() {
   const openFile = (p: string) => {
     setDrawer(false);
     setActive(p);
+    const directory = p.slice(0, p.lastIndexOf("/"));
+    const folder = directory.split("/")[0];
+    if (directory) cwdRef.current = directory;
+    if (folder) setOpenFolders((folders) => ({ ...folders, [folder]: true }));
     setTabs((t) => (t.includes(p) ? t : [...t, p]));
   };
 
@@ -325,7 +485,7 @@ export function IDE() {
 
   const spawnPython = useCallback(() => {
     pyWorker.current?.terminate();
-    const w = new Worker(pyWorkerUrl(), { type: "module" });
+    const w = new Worker(pyWorkerUrl());
     sab.current =
       typeof SharedArrayBuffer !== "undefined" && self.crossOriginIsolated
         ? new SharedArrayBuffer(8 + 65536)
@@ -370,18 +530,15 @@ export function IDE() {
         ctrl[1] = v === null ? -1 : Math.min(bytes.length, 65536);
         Atomics.store(ctrl, 0, 1);
         Atomics.notify(ctrl, 0);
-      } 
-      // In IDE.tsx -> runPython:
-      else if (m.type === "need-input") {
+      } else if (m.type === "need-input") {
         const v = await term.current!.readLine();
-        if (v === null || abortRef.current) return; // Terminate cleanly on cancel/stop
+        if (v === null || abortRef.current) return;
         outputLog.current += v + "\n";
         inputs.push(v);
         seen = 0;
         attempt++;
         w.postMessage({ type: "run", code, inputs, attempt });
-      }
-      else if (m.type === "done") finish(m.code);
+      } else if (m.type === "done") finish(m.code);
     };
     w.postMessage({ type: "run", code, inputs: sab.current ? null : inputs, attempt });
   };
@@ -400,11 +557,8 @@ export function IDE() {
     });
 
   const runNode = (code: string) => {
-  nodeWorker.current?.terminate();
-  const w = new Worker(
-    URL.createObjectURL(new Blob([NODE_WORKER], { type: "application/javascript" })),
-    { type: "module" }
-  );
+    nodeWorker.current?.terminate();
+    const w = new Worker(URL.createObjectURL(new Blob([NODE_WORKER], { type: "text/javascript" })));
     nodeWorker.current = w;
     w.onmessage = (e) => {
       const m = e.data;
@@ -423,7 +577,7 @@ export function IDE() {
     let stdin = "";
     let shown = 0;
     const interactiveCapable = /^(gcc|clang|openjdk|mono|dotnet)/.test(l.compiler ?? "");
-    if (!interactiveCapable && readsInput(code)) {
+    if (!interactiveCapable && readsInput(code, l.id)) {
       write(
         "\x1b[36mThis language takes all input up front. Type each line, then press Ctrl+D to run.\x1b[0m\r\n",
       );
@@ -440,7 +594,7 @@ export function IDE() {
     for (let round = 0; round < 80; round++) {
       let r: Awaited<ReturnType<typeof runRemoteFn>>;
       try {
-        r = await runRemoteFn({ data: { compiler: l.compiler!, code, stdin } });
+        r = await runRemoteFn({ data: { compiler: l.compiler!, language: l.id, code, stdin } });
       } catch (e) {
         write(`\x1b[31m${String(e)}\x1b[0m\r\n`);
         finish(1);
@@ -492,6 +646,9 @@ export function IDE() {
         return;
       }
       if (l.kind === "web" || l.kind === "react") {
+        outputLog.current = "";
+        lastRun.current = { path, lang: l.label, code: buildAiCode(l, path, fs) };
+        setFailed(false);
         setPreviewDoc(buildPreview(l, fs));
         setOutTab("preview");
         write(`\x1b[90mOpened live preview for ${path}\x1b[0m\r\n`);
@@ -504,7 +661,7 @@ export function IDE() {
       setAi((a) => ({ ...a, open: false }));
       abortRef.current = false;
       outputLog.current = "";
-      lastRun.current = { path, lang: l.label, code };
+      lastRun.current = { path, lang: l.label, code: buildAiCode(l, path, fs) };
       write(
         `\x1b[32m▶ ${path.split("/").pop()}\x1b[0m \x1b[90m(${l.label}${l.kind === "remote" ? ", online compiler" : ", on your PC"})\x1b[0m\r\n`,
       );
@@ -565,8 +722,13 @@ export function IDE() {
   const run = () => {
     if (doneRef.current) return;
     if (isWeb) {
+      const path = activeRef.current;
+      outputLog.current = "";
+      lastRun.current = { path, lang: activeLang.label, code: buildAiCode(activeLang, path, files) };
+      setFailed(false);
       setPreviewDoc(buildPreview(activeLang, files));
       setOutTab("preview");
+      write(`\x1b[90mOpened live preview for ${path}\x1b[0m\r\n`);
       return;
     }
     setOutTab("terminal");
@@ -756,6 +918,8 @@ export function IDE() {
   };
   const uploadToDrive = async () => {
     setMore(false);
+    
+    // Check if student is signed in
     if (!userEmail) {
       if (confirm("You need to sign in with Google to upload files to your Google Drive. Sign in now?")) {
         await googleSignIn();
@@ -767,12 +931,15 @@ export function IDE() {
     flash("Capturing screenshot and uploading to your Google Drive...");
 
     try {
+      // 1. Capture the 16:9 output snapshot
       let shot: string | null = null;
       try {
         shot = await snapshot(1.5);
       } catch (err) {
         console.warn("Could not capture screenshot:", err);
       }
+
+      // 2. Upload only active folder's code + screenshot to My Drive/labbench/
       const result = await uploadWorkspaceToGoogleDrive({
         files: folderFiles(),
         screenshotDataUrl: shot,
@@ -780,7 +947,7 @@ export function IDE() {
       });
 
       if (result.ok && result.folderUrl) {
-        flash(`Uploaded ${result.filesCount} files to Google Drive (output/ folder)!`, result.folderUrl);
+        flash(`Uploaded ${result.filesCount} files to Google Drive (labbench/ folder)!`, result.folderUrl);
       } else {
         flash(result.error || "Failed to upload to Google Drive");
       }
@@ -847,14 +1014,10 @@ export function IDE() {
 
   // ---------- AI TA ----------
   const askTa = async () => {
-    if (hasActivePro) {
-      // Pro users: unlimited AI TA access until the end of the current month.
-    } else {
-      const c = credits.date === today() ? credits : { date: today(), used: 0 };
-      if (c.used >= DAILY_CREDITS) {
-        setShowUpgrade(true);
-        return;
-      }
+    const c = credits.date === today() ? credits : { date: today(), used: 0 };
+    if (c.used >= DAILY_CREDITS) {
+      setShowUpgrade(true);
+      return;
     }
     const lr = lastRun.current;
     if (!lr) return;
@@ -868,8 +1031,8 @@ export function IDE() {
         },
       });
       if (r.ok) {
-        if (!r.fallback && !hasActivePro) {
-          const next = { date: today(), used: credits.date === today() ? credits.used + 1 : 1 };
+        if (!r.fallback) {
+          const next = { date: today(), used: c.used + 1 };
           setCredits(next);
           localStorage.setItem("labbench.aiCredits", JSON.stringify(next));
         }
@@ -885,7 +1048,7 @@ export function IDE() {
   useEffect(() => {
     const move = (e: MouseEvent) => {
       if (!dragging.current) return;
-      const left = window.innerWidth >= 768 ? 248 : 0;
+      const left = window.innerWidth >= 1024 ? 248 : 0;
       setSplit(Math.min(80, Math.max(25, ((e.clientX - left) / (window.innerWidth - left)) * 100)));
     };
     const up = () => {
@@ -901,13 +1064,13 @@ export function IDE() {
   }, []);
 
   return (
-    <div className="flex min-h-[100dvh] w-full flex-col bg-background text-foreground">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-rail px-3 md:hidden">
-        <Button 
-          variant="ghost" 
-          size="icon" 
-          title="Open navigation" 
-          aria-label="Open navigation" 
+    <div className="ide-root flex h-full min-h-0 flex-col bg-background text-foreground">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-rail px-2 lg:hidden">
+        <Button
+          variant="ghost"
+          size="icon"
+          title="Open navigation"
+          aria-label="Open navigation"
           onClick={() => setDrawer(true)}
         >
           <Menu />
@@ -920,16 +1083,17 @@ export function IDE() {
         </Button>
       </header>
       <div className="flex min-h-0 flex-1">
+        {/* Sidebar */}
         {drawer && (
           <div
-            className="fixed inset-0 z-40 bg-background/70 md:hidden"
+            className="fixed inset-0 z-40 bg-background/70 lg:hidden"
             onClick={() => setDrawer(false)}
           />
         )}
         <aside
-          className={`${drawer ? "flex fixed inset-y-0 left-0 z-50 w-[min(85vw,300px)] shadow-2xl" : "hidden"} shrink-0 flex-col border-r bg-rail md:relative md:flex md:w-[248px] md:shadow-none`}
+          className={`${drawer ? "flex fixed inset-y-0 left-0 z-50 w-[min(85vw,300px)] shadow-2xl" : "hidden"} shrink-0 flex-col border-r bg-rail lg:relative lg:flex lg:w-[248px] lg:shadow-none`}
         >
-          <div className="flex justify-end border-b p-1 md:hidden">
+          <div className="flex justify-end border-b p-1 lg:hidden">
             <Button
               variant="ghost"
               size="icon"
@@ -1069,21 +1233,37 @@ export function IDE() {
               <UserRound size={15} />
               <span className="min-w-0 flex-1 truncate">{userEmail || "Guest student"}</span>
               <span>
-                {hasActivePro ? "Unlimited" : `${Math.max(0, DAILY_CREDITS - credits.used)}/${DAILY_CREDITS} hints`}
+                {creditsLeft}/{DAILY_CREDITS} hints
               </span>
             </div>
-            {userEmail ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="mt-2 w-full"
-                onClick={() => {
-                  void supabase.auth.signOut();
-                  setDrawer(false);
-                }}
+            {userEmail && (
+              <div
+                className={`mt-2 flex items-center gap-2 text-[11px] ${driveSyncState === "error" ? "text-destructive" : "text-muted-foreground"}`}
+                title={driveSyncState === "error" ? "Google Drive sync failed. Check Drive access and reconnect." : "Workspace snapshot is stored in Google Drive/labbench/workspace.json"}
               >
-                <LogOut /> Sign out
-              </Button>
+                <Cloud size={13} />
+                {driveSyncState === "syncing" ? "Syncing workspace…" : driveSyncState === "synced" ? "Workspace synced to Drive" : driveSyncState === "error" ? "Drive sync failed" : "Drive access needed"}
+              </div>
+            )}
+            {userEmail ? (
+              <>
+                {(!driveToken || driveSyncState === "error") && (
+                  <Button variant="outline" size="sm" className="mt-2 w-full" onClick={() => void googleSignIn()}>
+                    <Cloud /> {driveToken ? "Reconnect Google Drive" : "Connect Google Drive"}
+                  </Button>
+                )}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="mt-2 w-full"
+                  onClick={() => {
+                    void supabase.auth.signOut();
+                    setDrawer(false);
+                  }}
+                >
+                  <LogOut /> Sign out
+                </Button>
+              </>
             ) : (
               <Button
                 variant="outline"
@@ -1098,15 +1278,16 @@ export function IDE() {
         </aside>
 
         <div
-          className="flex min-w-0 flex-1 flex-col-reverse md:flex-row"
+          className="ide-workspace flex min-w-0 flex-1 flex-col-reverse lg:flex-row"
           style={{ ["--split" as string]: `${split}%` }}
         >
-          <section className="flex h-[52%] min-h-0 min-w-0 flex-col bg-editor md:h-auto md:w-[var(--split)] md:shrink-0">
+          {/* Editor */}
+          <section className="ide-editor-pane flex min-h-0 min-w-0 flex-1 flex-col bg-editor lg:h-auto lg:w-[var(--split)] lg:flex-none lg:shrink-0">
             <div className="flex h-9 items-stretch border-b bg-panel">
               <select
                 value={langId}
                 onChange={(e) => selectLanguage(langById(e.target.value)!)}
-                className="border-r bg-panel px-2 text-xs md:hidden"
+                className="border-r bg-panel px-2 text-xs lg:hidden"
               >
                 {languages.map((l) => (
                   <option key={l.id} value={l.id}>
@@ -1119,7 +1300,7 @@ export function IDE() {
                   <div
                     key={p}
                     onClick={() => setActive(p)}
-                    className={`group flex cursor-pointer items-center gap-2 border-r px-3 text-[13px] ${active === p ? "border-t-2 border-t-primary bg-editor text-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                    className={`group flex cursor-pointer items-center gap-2 border-r px-3 text-[13px] ${active === p ? "border-t-2 border-t-primary bg-editor text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                   >
                     <FileCode2 size={13} className="text-primary" />
                     <span className="whitespace-nowrap">{p.split("/").pop()}</span>
@@ -1180,10 +1361,11 @@ export function IDE() {
               dragging.current = true;
               document.body.style.cursor = "col-resize";
             }}
-            className="hidden w-1 shrink-0 cursor-col-resize bg-border hover:bg-primary md:block"
+            className="hidden w-1 shrink-0 cursor-col-resize bg-border hover:bg-primary lg:block"
           />
 
-          <section className="flex h-[48%] min-h-0 min-w-0 flex-col border-b bg-panel md:h-auto md:flex-1 md:border-b-0">
+          {/* Output */}
+          <section className="ide-output-pane flex min-h-0 min-w-0 flex-1 flex-col border-b bg-panel lg:h-auto lg:border-b-0">
             <div className="relative flex h-11 shrink-0 items-center gap-1 border-b px-2">
               <Button
                 variant={outTab === "preview" ? "secondary" : "ghost"}
@@ -1200,12 +1382,12 @@ export function IDE() {
                 <TerminalSquare /> Terminal
               </Button>
               <div className="flex-1" />
-              {failed && status === "error" && (
+              {failed && (
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => void askTa()}
-                  title="Ask AI Teaching Assistant"
+                  title="Ask AI Teaching Assistant about the active code and output"
                 >
                   <GraduationCap />
                   <span className="hidden sm:inline">Ask AI TA</span>
@@ -1216,7 +1398,7 @@ export function IDE() {
                   <Square /> Stop
                 </Button>
               ) : (
-                <Button size="sm" className="hidden md:inline-flex" onClick={run}>
+                <Button size="sm" className="hidden lg:inline-flex" onClick={run}>
                   <Play /> Run
                 </Button>
               )}
@@ -1229,33 +1411,41 @@ export function IDE() {
               >
                 <MoreHorizontal />
               </Button>
-              {more && <div className="absolute right-2 top-10 z-30 w-56 rounded-md border bg-popover p-1 shadow-xl">
-                <Button 
-                  variant="ghost" 
-                  size="sm" 
-                  className="w-full justify-start text-primary" 
-                  disabled={uploadingDrive}
-                  onClick={() => { void uploadToDrive(); }}
-                >
-                  {uploadingDrive ? <Loader2 className="animate-spin" /> : <Cloud />}
-                  {uploadingDrive ? "Uploading to Drive..." : "Upload to Google Drive"}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-full justify-start"
-                  onClick={() => {
-                    setMore(false);
-                    setShowTour(true);
-                  }}
-                >
-                  <GraduationCap /> Product Tour
-                </Button>
-                <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => { void shareWorkspace(); }}><Share2 /> Send to phone</Button>
-                <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => { setInkSaver((v) => !v); setMore(false); }}>{inkSaver ? <Moon /> : <Sun />} {inkSaver ? "Dark" : "Light"} mode</Button>
-                <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => { void downloadPng(); setMore(false); }}><Download /> Download PNG</Button>
-                <Button variant="ghost" size="sm" className="w-full justify-start" onClick={clearScreen}><RotateCcw /> Clear terminal</Button>
-              </div>}
+                {more && <div className="absolute right-2 top-10 z-30 w-56 rounded-md border bg-popover p-1 shadow-xl">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start"
+                    onClick={() => void installApp()}
+                  >
+                    <Download /> Install as app
+                  </Button>
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    className="w-full justify-start text-primary" 
+                    disabled={uploadingDrive}
+                    onClick={() => { void uploadToDrive(); }}
+                  >
+                    {uploadingDrive ? <Loader2 className="animate-spin" /> : <Cloud />}
+                    {uploadingDrive ? "Uploading to Drive..." : "Upload to Google Drive"}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start"
+                    onClick={() => {
+                      setMore(false);
+                      setShowTour(true);
+                    }}
+                  >
+                    <GraduationCap /> Product Tour
+                  </Button>
+                  <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => { void shareWorkspace(); }}><Share2 /> Send to phone</Button>
+                  <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => { setInkSaver((v) => !v); setMore(false); }}>{inkSaver ? <Moon /> : <Sun />} {inkSaver ? "Dark output" : "Light output"}</Button>
+                  <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => { void downloadPng(); setMore(false); }}><Download /> Download PNG</Button>
+                  <Button variant="ghost" size="sm" className="w-full justify-start" onClick={clearScreen}><RotateCcw /> Clear terminal</Button>
+                </div>}
             </div>
 
             <div className="relative min-h-0 flex-1">
@@ -1265,9 +1455,11 @@ export function IDE() {
                 {isWeb ? (
                   <iframe
                     title="Live preview"
+                    ref={previewFrame}
                     srcDoc={previewDoc}
+                    scrolling="yes"
                     sandbox="allow-scripts allow-modals allow-forms"
-                    className="h-full w-full border-0 bg-paper"
+                    className="h-full w-full overflow-auto border-0 bg-paper"
                   />
                 ) : (
                   <div className="grid h-full place-items-center bg-panel text-sm text-muted-foreground">
@@ -1306,7 +1498,7 @@ export function IDE() {
                     <div className="flex-1">
                       <div className="text-sm font-semibold">AI Teaching Assistant</div>
                       <div className="text-[10px] text-muted-foreground">
-                        Explains the concept — you write the fix · {hasActivePro ? "Unlimited" : `${Math.max(0, DAILY_CREDITS - credits.used)} credits left today`}
+                        Explains the concept — you write the fix · {creditsLeft} credits left today
                       </div>
                     </div>
                     <button
@@ -1318,7 +1510,7 @@ export function IDE() {
                   </div>
                   {ai.loading ? (
                     <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
-                      <Loader2 size={14} className="animate-spin" /> Reading your error…
+                      <Loader2 size={14} className="animate-spin" /> Reviewing your code and output…
                     </div>
                   ) : ai.error ? (
                     <p className="text-sm text-destructive">{ai.error}</p>
@@ -1423,14 +1615,7 @@ export function IDE() {
       <ProModal
         open={showUpgrade}
         onClose={() => setShowUpgrade(false)}
-        onSuccess={() => {
-          if (!userEmail) return;
-          const email = userEmail.trim().toLowerCase();
-          const next = { email, purchasedAt: new Date().toISOString() };
-          saveSubscriptionForEmail(email, next);
-          setProSubscription(next);
-          localStorage.setItem("labbench.proPurchaseEmail", email);
-        }}
+        onSuccess={() => flash("Payment successful! Welcome to LabBench Pro.")}
         userEmail={userEmail}
       />
       <WalkthroughTour forceOpen={showTour} onClose={() => setShowTour(false)} />
@@ -1494,16 +1679,17 @@ export function IDE() {
   );
 }
 
+let _pyUrl: string | null = null;
 function pyWorkerUrl() {
-  const code = `
-    let sab = null;
-    onmessage = async (e) => {
-      const m = e.data;
-      if (m.type === 'init') {
-        sab = m.sab;
-        postMessage({ type: 'status', text: 'Initializing Python...' });
-      }
-    };
-  `;
-  return URL.createObjectURL(new Blob([code], { type: "application/javascript" }));
+  if (_pyUrl) return _pyUrl;
+  // Load via a blob so the worker inherits the page's isolation (needed for live input)
+  const xhr = new XMLHttpRequest();
+  xhr.open("GET", "/python-worker.js", false);
+  xhr.send();
+  _pyUrl = URL.createObjectURL(new Blob([xhr.responseText], { type: "text/javascript" }));
+  return _pyUrl;
+}
+
+function prompt_(msg: string, def?: string) {
+  return window.prompt(msg, def);
 }

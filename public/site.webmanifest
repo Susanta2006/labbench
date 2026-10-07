@@ -1,12 +1,17 @@
 {
   "name": "LabBench — Online Code IDE & Lab Assistant",
   "short_name": "LabBench",
-  "description": "Zero-setup online code editor and compiler for C, C++, Python, Java, and Web Dev with instant output snapshots and AI lab assistance.",
-  "start_url": "/",
-  "developer": "Susanta Banik",
+  "description": "A portable online coding workspace with compilers, live previews, saved projects, and an AI teaching assistant.",
+  "id": "/",
+  "start_url": "https://labbench-woad.vercel.app/?source=pwa",
+  "scope": "https://labbench-woad.vercel.app/",
+  "lang": "en",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
   "background_color": "#09090b",
   "theme_color": "#09090b",
+  "categories": ["education", "developer"],
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/icon.svg",
@@ -24,7 +29,7 @@
       "src": "/web-app-manifest-512x512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "maskable"
+      "purpose": "any maskable"
     }
   ]
 }

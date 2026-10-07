@@ -104,6 +104,20 @@ export function monacoLanguage(path: string): string {
   } as Record<string, string>)[ext] ?? "plaintext";
 }
 
-export function readsInput(code: string) {
-  return /scanf|getchar|gets\(|cin\s*>>|getline|Scanner|readLine|ReadLine|Console\.Read|fgets|STDIN|fmt\.Scan|bufio/.test(code);
+export function readsInput(code: string, languageId?: string) {
+  const commonInput = /scanf|getchar|gets\s*\(|cin\s*>>|getline|Scanner|readLine|ReadLine|Console\.Read|fgets|STDIN|fmt\.Scan|bufio/;
+  const languageInput: Record<string, RegExp> = {
+    bash: /(^|[;&|]\s*)read\s/,
+    ruby: /^\s*gets\b/m,
+    lua: /io\.read\s*\(/,
+    rust: /read_line\s*\(/,
+    haskell: /getLine\b/,
+    r: /readline\s*\(/,
+    julia: /readline\s*\(/,
+    pascal: /readln\s*(\(|;)/i,
+    d: /readln\s*\(/,
+    elixir: /IO\.gets\s*\(/,
+    typescript: /process\.stdin/,
+  };
+  return commonInput.test(code) || !!languageId && (languageInput[languageId]?.test(code) ?? false);
 }

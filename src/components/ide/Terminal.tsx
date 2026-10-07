@@ -12,6 +12,7 @@ export interface TerminalHandle {
   isReady: () => boolean;
   cancelRead: () => void;
   focus: () => void;
+  scrollLines: (amount: number) => void;
   snapshot: (opts: { dark: boolean; scale: number }) => string;
 }
 
@@ -138,10 +139,27 @@ export const Terminal = forwardRef<TerminalHandle, { dark: boolean; onInterrupt:
       isReady: () => !!term.current,
       cancelRead: () => resolve(null),
       focus: () => term.current?.focus(),
+      scrollLines: (amount) => term.current?.scrollLines(amount),
       snapshot: ({ dark, scale }) => (term.current ? renderSnapshot(term.current, dark ? DARK : BRIGHT, scale) : ""),
     }));
 
-    return <div ref={el} className="h-full w-full" />;
+    return (
+      <div
+        ref={el}
+        className={`terminal-host h-full w-full overflow-hidden ${dark ? "terminal-dark" : "terminal-light"}`}
+        onWheelCapture={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const lines =
+            event.deltaMode === WheelEvent.DOM_DELTA_LINE
+              ? event.deltaY
+              : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+                ? event.deltaY * 20
+                : event.deltaY / 40;
+          term.current?.scrollLines(Math.sign(lines) * Math.max(1, Math.round(Math.abs(lines))));
+        }}
+      />
+    );
   },
 );
 

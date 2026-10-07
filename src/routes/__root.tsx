@@ -19,15 +19,10 @@ const applicationStructuredData = {
   "@context": "https://schema.org",
   "@type": ["SoftwareApplication", "WebApplication"],
   name: "LabBench",
-  url: "https://labbench-woad.vercel.app",
+  url: "https://labbench-woad.vercel.app/",
   description:
     "Free online code editor and compiler for C, C++, Java, Python, and Web development. Designed for college students to run code, save output screenshots, and get AI error explanations.",
   applicationCategory: "DeveloperApplication",
-  founder: {
-          "@type": "Person",
-          "name": "Susanta Banik",
-          "url":  "https://susanta-banik.vercel.app",
-        }, 
   operatingSystem: "All",
   featureList: [
     "Online code editor and compiler for C, C++, Java, Python, and Web development",
@@ -37,7 +32,7 @@ const applicationStructuredData = {
   offers: {
     "@type": "Offer",
     price: "0",
-    priceCurrency: "INR",
+    priceCurrency: "USD",
   },
 };
 
@@ -112,23 +107,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         content:
           "Free online code editor and compiler for C, C++, Java, Python, and Web development. Designed for college students to run code, save output screenshots, and get AI error explanations.",
       },
-      {
-        name: "google-site-verification",
-        content: "8o9Dm94uzc3XtGBMijfLCeGXH8k0MQgKiY1eZskSbjE",
-      }, 
-      {
-        name: "Developer",
-        content: "Susanta Banik",
-      },
       { name: "theme-color", content: "#09090b" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
-      { rel: "preconnect", href: "https://fonts.googleapis.com" },
-      {
-        rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap",
-      },
       { rel: "icon", href: "/icon.svg", type: "image/svg+xml" },
       { rel: "apple-touch-icon", href: "/apple-touch-icon.png", sizes: "180x180" },
       { rel: "manifest", href: "/site.webmanifest" },
@@ -145,13 +127,13 @@ function RootShell({ children }: { children: ReactNode }) {
     <html lang="en">
       <head>
         <HeadContent />
-      </head>
-      <body className="flex min-h-screen overflow-y-auto bg-background text-foreground antialiased flex-col">
-        {children}
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(applicationStructuredData) }}
         />
+      </head>
+      <body>
+        {children}
         <Scripts />
       </body>
     </html>
@@ -161,13 +143,22 @@ function RootShell({ children }: { children: ReactNode }) {
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
 
+  useEffect(() => {
+    if ("serviceWorker" in navigator) {
+      void navigator.serviceWorker.register("/sw.js").catch((error) => {
+        console.info("Offline cache is unavailable in this browser session.", error);
+      });
+    }
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="flex min-h-screen flex-col flex-1">
-        <main className="flex-1 w-full [&>div]:max-md:h-auto [&>div]:max-md:min-h-screen">
+      <div className="app-shell flex h-[100dvh] flex-col overflow-hidden">
+        <main className="app-main min-h-0 flex-1 overflow-y-auto">
+          {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
           <Outlet />
-          <Footer />
         </main>
+        <Footer />
       </div>
       <CookieBanner />
     </QueryClientProvider>

@@ -81,10 +81,121 @@
     background-color: var(--color-background);
     color: var(--color-foreground);
     font-family: var(--font-sans);
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
 }
 
-.xterm { padding: 10px; height: 100%; }
-.xterm-viewport::-webkit-scrollbar { width: 8px; }
-.xterm-viewport::-webkit-scrollbar-thumb { background: var(--color-border); }
+.terminal-host,
+.terminal-host .xterm {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+}
+.terminal-dark { --terminal-background: #1e1e1e; }
+.terminal-light { --terminal-background: #ffffff; }
+.terminal-host .xterm {
+  padding: 10px;
+  background-color: var(--terminal-background);
+}
+.terminal-host .xterm .xterm-viewport {
+  background-color: var(--terminal-background) !important;
+  overflow-x: hidden;
+  overflow-y: scroll;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(113 113 122 / 55%) transparent;
+}
+
+/* Dark, low contrast scrollbars across the editor, explorer, preview and terminal. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(113 113 122 / 55%) transparent;
+}
+*::-webkit-scrollbar { width: 9px; height: 9px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgb(113 113 122 / 48%);
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgb(161 161 170 / 78%);
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-corner { background: transparent; }
+
+/* Stack output above the editor and let the whole workspace scroll on touch screens. */
+@media (max-width: 1023px) {
+  html,
+  body {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: clip;
+  }
+
+  .app-shell {
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
+  .app-main {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  .ide-root {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    height: auto;
+    min-height: 100dvh;
+  }
+
+  .ide-workspace {
+    width: 100%;
+    max-width: 100%;
+    min-height: 0;
+    flex: 0 0 auto;
+    overflow-x: clip;
+    overflow-y: visible;
+  }
+
+  .ide-editor-pane,
+  .ide-output-pane {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    min-height: max(55dvh, 420px);
+    flex: 0 0 max(55dvh, 420px);
+    overflow-x: clip;
+  }
+
+  .ide-editor-pane > div:last-child,
+  .ide-output-pane > div:last-child,
+  .ide-output-pane iframe,
+  .ide-output-pane .xterm {
+    max-width: 100%;
+    min-width: 0;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023px) and (orientation: portrait) {
+  .ide-editor-pane,
+  .ide-output-pane {
+    min-height: max(52dvh, 500px);
+    flex-basis: max(52dvh, 500px);
+  }
+}
+
+@media (max-width: 420px) {
+  .terminal-host .xterm { padding: 6px; }
+}

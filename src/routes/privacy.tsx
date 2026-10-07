@@ -47,7 +47,7 @@ function PrivacyPage() {
             <h2>Google Drive API Disclosure (drive.file scope)</h2>
           </div>
           <p>
-            When you sign in with Google to enable the "Upload to Drive" feature, LabBench requests
+            When you sign in with Google to sync your workspace or upload output, LabBench requests
             only the
             <code className="mx-1 rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
               https://www.googleapis.com/auth/drive.file
@@ -64,10 +64,11 @@ function PrivacyPage() {
               download any of your personal documents, photos, or existing folders in Google Drive.
             </li>
             <li>
-              <strong>Dedicated Folder:</strong> Output screenshots and source code files are saved
-              strictly inside a{" "}
+              <strong>Workspace sync:</strong> Signed-in users can sync and restore the full
+              workspace snapshot at sign-in, after edits, and when returning to the app. The
+              snapshot and optional output uploads are saved inside a{" "}
               <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground">
-                My Drive/output/
+                My Drive/labbench/
               </code>{" "}
               directory for your own lab assignment records.
             </li>
@@ -93,8 +94,9 @@ function PrivacyPage() {
             <h2>AI Teaching Assistant Concept Explanations</h2>
           </div>
           <p>
-            When you request hints from the AI TA, only the active file's code snippet and compiler
-            terminal error are sent to the AI processing model. Your code is never used to train
+            When you request help from the AI TA, the active program's code and recent terminal or
+            browser preview output are sent to the configured AI processing model. Web and React
+            projects include the files in their language folder. Your code is never used to train
             public machine learning models.
           </p>
         </section>
