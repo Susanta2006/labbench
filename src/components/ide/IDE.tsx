@@ -103,8 +103,18 @@ const fmt = a => a.map(x => typeof x === 'string' ? x : (()=>{try{return JSON.st
 console.log = (...a) => postMessage({type:'out', text: fmt(a)+'\n'});
 console.info = console.log;
 console.error = console.warn = (...a) => postMessage({type:'err', text: fmt(a)+'\n'});
-onmessage = async e => { try { await (new Function('return (async()=>{'+e.data+'\n})()'))(); postMessage({type:'done',code:0}); }
- catch(err){ postMessage({type:'err', text: String(err && err.stack || err)+'\n'}); postMessage({type:'done',code:1}); } };`;
+onmessage = async e => {
+  try {
+    const blob = new Blob([e.data], { type: 'application/javascript' });
+    const url = URL.createObjectURL(blob);
+    await import(url);
+    URL.revokeObjectURL(url);
+    postMessage({type:'done',code:0});
+  } catch(err) {
+    postMessage({type:'err', text: String(err && err.stack || err)+'\n'});
+    postMessage({type:'done',code:1});
+  }
+};`;
 
 export function IDE() {
   const { files, setFiles, saved, saveNow } = useWorkspace();
