@@ -1,9 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
+import { getRequest } from "@tanstack/react-start/server";
 import { z } from "zod";
 
-const SYSTEM = `You are LabBench AI, a patient friendly teaching assistant for college programming students, across all programming languages.
-Introduce yourself as LabBench AI, and your developer Mr. Susanta Banik and greet to students all these in 20-30 words in a friendly and simple plain english tone.
-Explain the syntax/logic error concept in simple friendly English under 150 words.
+const SYSTEM = `You are LabBench AI TA, a patient teaching assistant for college programming students, across all programming languages.
 Help interpret the provided code and any compiler output, terminal output, browser preview output, or successful program result. If no output is provided, explain what the code is doing or suggest one useful concept to inspect. Use simple English and stay under 150 words. Do NOT provide or write corrected code.
 You may point to a line number and explain a concept (such as a missing delimiter, off-by-one error, type mismatch, or unexpected runtime result). Give a hint about what to check. Never output a code block or a fixed version of the program.`;
 
@@ -125,6 +124,28 @@ export const askAiTa = createServerFn({ method: "POST" })
       .parse(d),
   )
   .handler(async ({ data }) => {
+    // Enforce the daily allowance for authenticated accounts on the server.
+    // Guests retain the existing browser-only allowance.
+    const authorization = getRequest().headers.get("authorization");
+    if (authorization?.startsWith("Bearer ")) {
+      const token = authorization.slice("Bearer ".length);
+      const url = process.env["SUPABASE_URL"];
+      const key = process.env["SUPABASE_PUBLISHABLE_KEY"];
+      if (!url || !key) throw new Error("Supabase is not configured.");
+      const { createClient } = await import("@supabase/supabase-js");
+      const authClient = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+      const { data: claims, error: claimsError } = await authClient.auth.getClaims(token);
+      const userId = claims?.claims?.sub;
+      if (claimsError || typeof userId !== "string") throw new Error("Please sign in again to use the AI assistant.");
+      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+      const { data: allowance, error: allowanceError } = await (supabaseAdmin as any).rpc("consume_ai_credit", { p_user_id: userId });
+      if (allowanceError) {
+        console.error("AI allowance check failed:", allowanceError.message);
+        throw new Error("Could not verify your AI allowance. Please try again.");
+      }
+      const result = Array.isArray(allowance) ? allowance[0] : allowance;
+      if (!result?.allowed) return { ok: false as const, error: "You’ve used your 5 free AI hints for today. Upgrade to Pro for unlimited hints." };
+    }
     const providers = configuredProviders();
     const prompt = `Language: ${data.language}\n\nCode:\n${data.code}\n\nCompiler/terminal output:\n${data.output}`;
     for (const provider of providers) {
