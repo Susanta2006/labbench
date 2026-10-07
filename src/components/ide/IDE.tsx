@@ -370,15 +370,18 @@ export function IDE() {
         ctrl[1] = v === null ? -1 : Math.min(bytes.length, 65536);
         Atomics.store(ctrl, 0, 1);
         Atomics.notify(ctrl, 0);
-      } else if (m.type === "need-input") {
+      } 
+      // In IDE.tsx -> runPython:
+      else if (m.type === "need-input") {
         const v = await term.current!.readLine();
-        if (v === null || abortRef.current) return;
+        if (v === null || abortRef.current) return; // Terminate cleanly on cancel/stop
         outputLog.current += v + "\n";
         inputs.push(v);
         seen = 0;
         attempt++;
         w.postMessage({ type: "run", code, inputs, attempt });
-      } else if (m.type === "done") finish(m.code);
+      }
+      else if (m.type === "done") finish(m.code);
     };
     w.postMessage({ type: "run", code, inputs: sab.current ? null : inputs, attempt });
   };
