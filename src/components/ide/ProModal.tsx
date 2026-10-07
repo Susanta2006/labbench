@@ -39,6 +39,10 @@ export function ProModal({ open, onClose, onSuccess, userEmail }: ProModalProps)
   if (!open) return null;
 
   const handleSubscribe = async () => {
+    if (!userEmail) {
+      setError("Sign in with Google before purchasing Pro so we can attach it to your account.");
+      return;
+    }
     setLoading(true);
     setError(null);
 
@@ -146,11 +150,11 @@ export function ProModal({ open, onClose, onSuccess, userEmail }: ProModalProps)
             <span className="text-sm font-medium text-foreground">Pro Monthly</span>
             <div className="text-right">
               <span className="text-2xl font-black text-foreground">₹29</span>
-              <span className="text-xs text-muted-foreground"> / month</span>
+            <span className="text-xs text-muted-foreground"> / month</span>
             </div>
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
-            Less than a cup of chai. Cancel anytime.
+            One-time payment. Access lasts one month; renew manually when it expires.
           </p>
         </div>
 
@@ -187,9 +191,13 @@ export function ProModal({ open, onClose, onSuccess, userEmail }: ProModalProps)
           </div>
         )}
 
+        {!userEmail && (
+          <p className="mt-4 text-xs text-muted-foreground">Sign in with Google to purchase Pro and keep your access linked to your account.</p>
+        )}
+
         <button
           onClick={handleSubscribe}
-          disabled={loading}
+          disabled={loading || !userEmail}
           className="mt-6 flex w-full items-center justify-center gap-2 rounded-lg bg-primary py-2.5 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90 disabled:opacity-50"
         >
           {loading ? <Loader2 size={16} className="animate-spin" /> : "Unlock Pro for ₹29"}

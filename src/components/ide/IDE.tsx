@@ -48,6 +48,7 @@ import {
 import { useWorkspace } from "@/lib/ide/workspace";
 import { runRemote } from "@/lib/ide/run-remote.functions";
 import { askAiTa } from "@/lib/ide/ai-ta.functions";
+import { getProStatus } from "@/lib/ide/razorpay.functions";
 import { formatCode } from "@/lib/ide/format";
 import { runShell } from "@/lib/ide/shell";
 import { Terminal, type TerminalHandle } from "./Terminal";
@@ -196,6 +197,7 @@ export function IDE() {
   });
   const [credits, setCredits] = useState({ date: today(), used: 0 });
   const [showUpgrade, setShowUpgrade] = useState(false);
+  const [isPro, setIsPro] = useState(false);
   const [showTour, setShowTour] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [more, setMore] = useState(false);
@@ -227,17 +229,21 @@ export function IDE() {
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
   const runRemoteFn = useServerFn(runRemote);
   const askAiFn = useServerFn(askAiTa);
+  const getProStatusFn = useServerFn(getProStatus);
   const createShareFn = useServerFn(createShare);
   useEffect(() => {
     void supabase.auth.getSession().then(({ data }) => {
       setUserEmail(data.session?.user.email ?? "");
       setDriveToken(data.session?.provider_token ?? null);
+      if (data.session) void getProStatusFn().then((status) => setIsPro(status.isPro)).catch(() => setIsPro(false));
     });
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setUserEmail(session?.user.email ?? "");
       setDriveToken(session?.provider_token ?? null);
+      setIsPro(false);
+      if (session) void getProStatusFn().then((status) => setIsPro(status.isPro)).catch(() => setIsPro(false));
     });
     return () => subscription.unsubscribe();
   }, []);
@@ -1015,7 +1021,7 @@ export function IDE() {
   // ---------- AI TA ----------
   const askTa = async () => {
     const c = credits.date === today() ? credits : { date: today(), used: 0 };
-    if (c.used >= DAILY_CREDITS) {
+    if (!isPro && c.used >= DAILY_CREDITS) {
       setShowUpgrade(true);
       return;
     }
@@ -1615,7 +1621,10 @@ export function IDE() {
       <ProModal
         open={showUpgrade}
         onClose={() => setShowUpgrade(false)}
-        onSuccess={() => flash("Payment successful! Welcome to LabBench Pro.")}
+        onSuccess={() => {
+          setIsPro(true);
+          flash("Payment successful! Welcome to LabBench Pro.");
+        }}
         userEmail={userEmail}
       />
       <WalkthroughTour forceOpen={showTour} onClose={() => setShowTour(false)} />
