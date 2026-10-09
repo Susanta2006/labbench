@@ -190,10 +190,10 @@ onmessage = async e => { try { await (new Function('return (async()=>{'+e.data+'
 
 export function IDE() {
   const { files, setFiles, saved, saveNow, loaded, updatedAt, setUpdatedAt } = useWorkspace();
-  const [langId, setLangId] = useState("python");
-  const [active, setActive] = useState("python/main.py");
-  const [tabs, setTabs] = useState<string[]>(["python/main.py"]);
-  const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({ python: true });
+  const [langId, setLangId] = useState("");
+  const [active, setActive] = useState("");
+  const [tabs, setTabs] = useState<string[]>([]);
+  const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({});
   const [outTab, setOutTab] = useState<"preview" | "terminal">("terminal");
   const [inkSaver, setInkSaver] = useState(false);
   const [status, setStatus] = useState<Status>("idle");
@@ -239,7 +239,7 @@ export function IDE() {
   const updatedAtRef = useRef(updatedAt);
   updatedAtRef.current = updatedAt;
   const lastRun = useRef<{ path: string; lang: string; code: string } | null>(null);
-  const cwdRef = useRef("python");
+  const cwdRef = useRef("");
   const shellHistory = useRef<string[]>([]);
   const shellWaiting = useRef(false);
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
@@ -820,6 +820,7 @@ export function IDE() {
   }, []);
 
   const run = () => {
+    if (!activeRef.current) return;
     if (doneRef.current) return;
     if (isWeb) {
       const path = activeRef.current;
@@ -918,6 +919,7 @@ export function IDE() {
   }, [files]);
 
   const newFile = () => {
+    if (!langId) return flash("Select a language first");
     const name = prompt_(
       `New file in "${cwdRef.current}/" (e.g. helper.${langById(langId)?.ext[0] ?? "txt"}):`,
     );
@@ -929,6 +931,7 @@ export function IDE() {
     openFile(p);
   };
   const newFolder = () => {
+    if (!langId) return flash("Select a language first");
     const folderName = prompt_("New folder name:");
     if (!folderName || /[\\/]/.test(folderName) || folderName === "." || folderName === "..") return;
     const parent = cwdRef.current || langId || "python";
@@ -1213,9 +1216,9 @@ export function IDE() {
           <Menu />
         </Button>
         <span className="flex-1 truncate text-sm font-semibold">
-          LabBench <span className="font-normal text-muted-foreground">/ {activeLang.label}</span>
+          LabBench <span className="font-normal text-muted-foreground">/ {langId ? activeLang.label : "Select a language"}</span>
         </span>
-        <Button size="sm" onClick={run} disabled={status === "running"}>
+        <Button size="sm" onClick={run} disabled={status === "running" || !active}>
           <Play /> Run
         </Button>
       </header>
@@ -1381,6 +1384,7 @@ export function IDE() {
                 onChange={(e) => selectLanguage(langById(e.target.value)!)}
                 className="border-r bg-panel px-2 text-xs lg:hidden"
               >
+                <option value="" disabled>Select language</option>
                 {languages.map((l) => (
                   <option key={l.id} value={l.id}>
                     {l.label}
@@ -1490,7 +1494,7 @@ export function IDE() {
                   <Square /> Stop
                 </Button>
               ) : (
-                <Button size="sm" className="hidden lg:inline-flex" onClick={run}>
+                <Button size="sm" className="hidden lg:inline-flex" onClick={run} disabled={!active || status === "running"}>
                   <Play /> Run
                 </Button>
               )}
@@ -1629,7 +1633,7 @@ export function IDE() {
       </div>
 
       <footer className="flex h-6 items-center gap-4 overflow-hidden bg-statusbar px-3 font-mono text-[11px] whitespace-nowrap text-statusbar-foreground">
-        <span>{activeLang.label}</span>
+        <span>{langId ? activeLang.label : "No language selected"}</span>
         <span className="hidden sm:inline">
           {activeLang.kind === "remote"
             ? "Online compiler"
