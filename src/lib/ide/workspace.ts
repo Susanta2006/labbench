@@ -6,9 +6,19 @@ const KEY = "labbench.workspace.v1";
 const UPDATED_KEY = "labbench.workspace.updatedAt";
 
 function seed(): Files {
-  const f: Files = {};
-  for (const l of LANGUAGES) for (const [n, c] of Object.entries(l.files)) f[`${l.id}/${n}`] = c;
-  return f;
+  return {};
+}
+
+export function removeUnusedStarterFiles(files: Files): Files {
+  const next = { ...files };
+  for (const language of LANGUAGES) {
+    for (const [name, content] of Object.entries(language.files)) {
+      const path = `${language.id}/${name}`;
+      // Remove the untouched starter files that older versions pre-created in every folder.
+      if (next[path] === content) delete next[path];
+    }
+  }
+  return next;
 }
 
 export function useWorkspace() {
@@ -22,7 +32,7 @@ export function useWorkspace() {
   useEffect(() => {
     try {
       const raw = localStorage.getItem(KEY);
-      if (raw) setFiles({ ...seed(), ...JSON.parse(raw) });
+      if (raw) setFiles(removeUnusedStarterFiles(JSON.parse(raw)));
       setUpdatedAt(localStorage.getItem(UPDATED_KEY));
     } catch { /* ignore */ }
     setLoaded(true);

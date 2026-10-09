@@ -86,7 +86,7 @@ async function uploadFileToDrive(
  * Locates or creates the LabBench folder in the student's root My Drive.
  */
 async function getOrCreateLabBenchFolder(token: string): Promise<{ id: string; webViewLink?: string }> {
-  const query = encodeURIComponent("name = 'labbench' and mimeType = 'application/vnd.google-apps.folder' and 'root' in parents and trashed = false");
+  const query = encodeURIComponent("(name = 'LabBench' or name = 'labbench') and mimeType = 'application/vnd.google-apps.folder' and 'root' in parents and trashed = false");
   const searchRes = await fetch(
     `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,webViewLink)`,
     {
@@ -101,7 +101,18 @@ async function getOrCreateLabBenchFolder(token: string): Promise<{ id: string; w
 
   const { files } = await searchRes.json();
   if (files && files.length > 0) {
-    return { id: files[0].id, webViewLink: files[0].webViewLink };
+    const existing = files[0] as { id: string; name: string; webViewLink?: string };
+    if (existing.name !== "LabBench") {
+      const renameRes = await fetch(`https://www.googleapis.com/drive/v3/files/${existing.id}?fields=id,name,webViewLink`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "LabBench" }),
+      });
+      if (!renameRes.ok) throw new Error(`Failed to rename the existing LabBench Drive folder: ${await renameRes.text()}`);
+      const renamed = await renameRes.json();
+      return { id: renamed.id, webViewLink: renamed.webViewLink };
+    }
+    return { id: existing.id, webViewLink: existing.webViewLink };
   }
 
   // Create one dedicated folder at the root of My Drive when needed.
@@ -112,7 +123,7 @@ async function getOrCreateLabBenchFolder(token: string): Promise<{ id: string; w
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      name: "labbench",
+      name: "LabBench",
       mimeType: "application/vnd.google-apps.folder",
       parents: ["root"],
     }),
@@ -224,12 +235,12 @@ export async function syncWorkspaceWithGoogleDrive(
 }
 
 /**
- * Uploads the output snapshot and active folder code files to My Drive/labbench/.
+ * Uploads the output snapshot and active folder code files to My Drive/LabBench/.
  */
 export async function uploadWorkspaceToGoogleDrive({
   files,
   screenshotDataUrl,
-  folderName = "labbench",
+  folderName = "LabBench",
 }: {
   files: Record<string, string>;
   screenshotDataUrl?: string | null;
