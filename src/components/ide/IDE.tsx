@@ -549,10 +549,7 @@ export function IDE() {
       (p) => p.startsWith(root + "/") && !p.endsWith(".keep"),
     );
     if (filesRef.current[entry] === undefined && !existing) {
-      setFiles((f) => ({
-        ...f,
-        ...Object.fromEntries(Object.entries(l.files).map(([n, c]) => [`${root}/${n}`, c])),
-      }));
+      setFiles((f) => ({ ...f, [entry]: "" }));
     }
     openFile(filesRef.current[entry] !== undefined || !existing ? entry : existing);
   };
