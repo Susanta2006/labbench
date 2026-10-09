@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Editor, { type OnMount } from "@monaco-editor/react";
 import { toPng } from "html-to-image";
 import { QRCodeSVG } from "qrcode.react";
@@ -13,6 +13,7 @@ import {
   Sun,
   Moon,
   FilePlus,
+  FolderPlus,
   Trash2,
   Pencil,
   ChevronDown,
@@ -45,7 +46,7 @@ import {
   readsInput,
   type Language,
 } from "@/lib/ide/languages";
-import { useWorkspace } from "@/lib/ide/workspace";
+import { removeUnusedStarterFiles, useWorkspace } from "@/lib/ide/workspace";
 import { runRemote } from "@/lib/ide/run-remote.functions";
 import { askAiTa } from "@/lib/ide/ai-ta.functions";
 import { getProStatus } from "@/lib/ide/razorpay.functions";
@@ -60,6 +61,7 @@ import { ProModal } from "./ProModal";
 import { WalkthroughTour } from "./WalkthroughTour";
 
 type Status = "idle" | "running" | "done" | "error" | "stopped";
+type WorkspaceNode = { name: string; path: string; files: string[]; folders: WorkspaceNode[] };
 type InstallPromptEvent = Event & {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
@@ -92,19 +94,20 @@ const PREVIEW_BRIDGE = `<script>
 
 function buildAiCode(lang: Language, path: string, files: Record<string, string>) {
   if (lang.kind === "web" || lang.kind === "react") {
+    const root = path.split("/")[0] || lang.id;
     return Object.entries(files)
-      .filter(([file]) => file.startsWith(`${lang.id}/`) && !file.endsWith(".keep"))
+      .filter(([file]) => file.startsWith(`${root}/`) && !file.endsWith(".keep"))
       .map(([file, code]) => `// ${file}\n${code}`)
       .join("\n\n");
   }
   return files[path] ?? "";
 }
 
-function buildPreview(lang: Language, files: Record<string, string>) {
-  const inFolder = (n: string) => files[`${lang.id}/${n}`];
+function buildPreview(lang: Language, files: Record<string, string>, root = lang.id) {
+  const inFolder = (n: string) => files[`${root}/${n}`];
   if (lang.kind === "react") {
     const source = Object.keys(files)
-      .filter((p) => p.startsWith("react/") && p.endsWith(".jsx"))
+      .filter((p) => p.startsWith(`${root}/`) && p.endsWith(".jsx"))
       .map((p) => files[p])
       .join("\n");
     // These files run as one Babel script, so resolve React imports against the UMD globals
@@ -138,7 +141,7 @@ function buildPreview(lang: Language, files: Record<string, string>) {
       .replace(/^\s*export\s+(?=(?:async\s+)?(?:function|class|const|let|var)\b)/gm, "")
       .replace(/^\s*export\s*\{[^}]*\}(?:\s+from\s+["'][^"']+["'])?\s*;?\s*$/gm, "");
     const css = Object.keys(files)
-      .filter((p) => p.startsWith("react/") && p.endsWith(".css"))
+      .filter((p) => p.startsWith(`${root}/`) && p.endsWith(".css"))
       .map((p) => files[p])
       .join("\n");
     return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${css}</style>
@@ -162,6 +165,19 @@ function buildPreview(lang: Language, files: Record<string, string>) {
   if (/<head(?:\s[^>]*)?>/i.test(html)) html = html.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}${PREVIEW_BRIDGE}`);
   else html = html.replace(/<body(?:\s[^>]*)?>/i, (body) => `${PREVIEW_BRIDGE}${body}`);
   return html;
+}
+
+function languageForWorkspaceRoot(root: string, files: Record<string, string>): Language | undefined {
+  const known = langById(root);
+  if (known) return known;
+  if (files[`${root}/index.html`] !== undefined) return langById("web");
+  const rootFiles = Object.keys(files).filter((path) => path.startsWith(`${root}/`) && !path.endsWith("/.keep"));
+  if (rootFiles.some((path) => path.endsWith(".jsx"))) return langById("react");
+  for (const path of rootFiles) {
+    const language = langForPath(path);
+    if (language) return language;
+  }
+  return undefined;
 }
 
 const NODE_WORKER = `
@@ -271,7 +287,8 @@ export function IDE() {
     () => [...CORE_LANGUAGES, ...EXTRA_LANGUAGES.filter((l) => addedLangs.includes(l.id))],
     [addedLangs],
   );
-  const activeLang = langForPath(active) ?? langById(langId) ?? langById("python")!;
+  const activeRoot = active.split("/")[0] || langId;
+  const activeLang = languageForWorkspaceRoot(activeRoot, files) ?? langForPath(active) ?? langById(langId) ?? langById("python")!;
   useEffect(() => {
     if (!active) {
       setLangId("");
@@ -279,7 +296,7 @@ export function IDE() {
       return;
     }
     const top = active.split("/")[0];
-    const l = (top && langById(top)) || langForPath(active);
+    const l = (top && languageForWorkspaceRoot(top, files)) || langForPath(active);
     const directory = active.slice(0, active.lastIndexOf("/"));
     if (directory) cwdRef.current = directory;
     if (l) setOpenFolders((folders) => ({ ...folders, [l.id]: true }));
@@ -291,7 +308,7 @@ export function IDE() {
     }
     setFailed(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active]);
+  }, [active, files]);
   const isWeb = activeLang.kind === "web" || activeLang.kind === "react";
   const creditsLeft = credits.date === today() ? DAILY_CREDITS - credits.used : DAILY_CREDITS;
 
@@ -353,7 +370,7 @@ export function IDE() {
       }
       if (result.action === "pulled" && result.files) {
         filesRef.current = result.files;
-        setFiles(result.files);
+        setFiles(removeUnusedStarterFiles(result.files));
       }
       setDriveSyncState("synced");
     });
@@ -424,10 +441,10 @@ export function IDE() {
       outputLog.current = "";
       lastRun.current = { path, lang: activeLang.label, code: buildAiCode(activeLang, path, files) };
       setFailed(false);
-      setPreviewDoc(buildPreview(activeLang, files));
+      setPreviewDoc(buildPreview(activeLang, files, active.split("/")[0]));
     }, 400);
     return () => clearTimeout(t);
-  }, [files, isWeb, activeLang]);
+  }, [files, isWeb, activeLang, active]);
   useEffect(() => {
     setOutTab(isWeb ? "preview" : "terminal");
   }, [isWeb]);
@@ -438,23 +455,103 @@ export function IDE() {
     const directory = p.slice(0, p.lastIndexOf("/"));
     const folder = directory.split("/")[0];
     if (directory) cwdRef.current = directory;
-    if (folder) setOpenFolders((folders) => ({ ...folders, [folder]: true }));
+    if (folder) {
+      setOpenFolders((folders) => ({ ...folders, [folder]: true }));
+      const language = languageForWorkspaceRoot(folder, filesRef.current);
+      if (language) setLangId(language.id);
+    }
     setTabs((t) => (t.includes(p) ? t : [...t, p]));
+  };
+
+  const renderWorkspaceNode = (node: WorkspaceNode, depth = 0): ReactNode => {
+    const isOpen = Boolean(openFolders[node.path]);
+    return (
+      <div key={node.path}>
+        <div className="group flex items-center rounded pr-1 hover:bg-muted">
+          <button
+            onClick={() => {
+              setOpenFolders((open) => ({ ...open, [node.path]: !open[node.path] }));
+              cwdRef.current = node.path;
+              setLangId(languageForWorkspaceRoot(node.path.split("/")[0] || "", filesRef.current)?.id || "python");
+            }}
+            className="flex min-w-0 flex-1 items-center gap-1 py-1 text-left"
+            style={{ paddingLeft: `${8 + depth * 12}px` }}
+          >
+            {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            <Folder size={14} className="shrink-0 text-warning" />
+            <span className="truncate">{node.name}</span>
+          </button>
+          <div className="flex shrink-0 items-center">
+            <button
+              onClick={() => renameFolder(node.path)}
+              aria-label={`Rename folder ${node.name}`}
+              title="Rename folder"
+              className="rounded p-1 text-muted-foreground hover:text-foreground"
+            >
+              <Pencil size={12} />
+            </button>
+            <button
+              onClick={() => deleteFolder(node.path)}
+              aria-label={`Delete folder ${node.name}`}
+              title="Delete folder"
+              className="rounded p-1 text-muted-foreground hover:text-destructive"
+            >
+              <Trash2 size={12} />
+            </button>
+          </div>
+        </div>
+        {isOpen && (
+          <>
+            {node.folders.map((folder) => renderWorkspaceNode(folder, depth + 1))}
+            {node.files.map((path) => (
+              <div
+                key={path}
+                className={`group flex items-center gap-1 rounded py-1 pr-1 ${active === path ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}
+                style={{ paddingLeft: `${28 + depth * 12}px` }}
+              >
+                <button className="flex min-w-0 flex-1 items-center gap-1.5 text-left" onClick={() => openFile(path)}>
+                  <FileCode2 size={13} className="shrink-0 text-primary" />
+                  <span className="truncate">{path.slice(node.path.length + 1)}</span>
+                </button>
+                <button
+                  onClick={() => renameFile(path)}
+                  aria-label={`Rename ${path.split("/").at(-1)}`}
+                  title="Rename file"
+                  className="rounded p-1 text-muted-foreground hover:text-foreground"
+                >
+                  <Pencil size={12} />
+                </button>
+                <button
+                  onClick={() => deleteFile(path)}
+                  aria-label={`Delete ${path.split("/").at(-1)}`}
+                  title="Delete file"
+                  className="rounded p-1 text-muted-foreground hover:text-destructive"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+    );
   };
 
   const selectLanguage = (l: Language) => {
     setDrawer(false);
     setLangId(l.id);
-    cwdRef.current = l.id;
-    setOpenFolders((o) => ({ ...o, [l.id]: true }));
-    const entry = `${l.id}/${l.entry}`;
+    const knownRoots = [...new Set(Object.keys(filesRef.current).map((path) => path.split("/")[0]!))];
+    const root = knownRoots.find((candidate) => languageForWorkspaceRoot(candidate, filesRef.current)?.id === l.id) ?? l.id;
+    cwdRef.current = root;
+    setOpenFolders((o) => ({ ...o, [root]: true }));
+    const entry = `${root}/${l.entry}`;
     const existing = Object.keys(filesRef.current).find(
-      (p) => p.startsWith(l.id + "/") && !p.endsWith(".keep"),
+      (p) => p.startsWith(root + "/") && !p.endsWith(".keep"),
     );
     if (filesRef.current[entry] === undefined && !existing) {
       setFiles((f) => ({
         ...f,
-        ...Object.fromEntries(Object.entries(l.files).map(([n, c]) => [`${l.id}/${n}`, c])),
+        ...Object.fromEntries(Object.entries(l.files).map(([n, c]) => [`${root}/${n}`, c])),
       }));
     }
     openFile(filesRef.current[entry] !== undefined || !existing ? entry : existing);
@@ -644,7 +741,7 @@ export function IDE() {
     new Promise<void>((resolve) => {
       saveNow();
       const fs = filesRef.current;
-      const l = langForPath(path);
+      const l = languageForWorkspaceRoot(path.split("/")[0] ?? "", fs) ?? langForPath(path);
       const code = fs[path] ?? "";
       if (!l) {
         write(`\x1b[31mDon't know how to run ${path}\x1b[0m\r\n`);
@@ -655,7 +752,7 @@ export function IDE() {
         outputLog.current = "";
         lastRun.current = { path, lang: l.label, code: buildAiCode(l, path, fs) };
         setFailed(false);
-        setPreviewDoc(buildPreview(l, fs));
+        setPreviewDoc(buildPreview(l, fs, path.split("/")[0]));
         setOutTab("preview");
         write(`\x1b[90mOpened live preview for ${path}\x1b[0m\r\n`);
         resolve();
@@ -732,7 +829,7 @@ export function IDE() {
       outputLog.current = "";
       lastRun.current = { path, lang: activeLang.label, code: buildAiCode(activeLang, path, files) };
       setFailed(false);
-      setPreviewDoc(buildPreview(activeLang, files));
+      setPreviewDoc(buildPreview(activeLang, files, path.split("/")[0]));
       setOutTab("preview");
       write(`\x1b[90mOpened live preview for ${path}\x1b[0m\r\n`);
       return;
@@ -802,30 +899,50 @@ export function IDE() {
 
   // ---------- Files ----------
   const tree = useMemo(() => {
-    const t: Record<string, string[]> = {};
-    for (const p of Object.keys(files)) {
-      if (p.endsWith("/.keep") && p.split("/").length === 2) {
-        t[p.split("/")[0]!] ??= [];
-        continue;
+    const roots: WorkspaceNode[] = [];
+    const all = new Map<string, WorkspaceNode>();
+    for (const path of Object.keys(files).sort()) {
+      const parts = path.split("/");
+      let parent: WorkspaceNode | undefined;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const dirPath = parts.slice(0, i + 1).join("/");
+        let node = all.get(dirPath);
+        if (!node) {
+          node = { name: parts[i]!, path: dirPath, files: [], folders: [] };
+          all.set(dirPath, node);
+          if (parent) parent.folders.push(node);
+          else roots.push(node);
+        }
+        parent = node;
       }
-      const d = p.split("/")[0] ?? "";
-      (t[d] ??= []).push(p);
+      if (!path.endsWith("/.keep")) parent?.files.push(path);
     }
-    return Object.keys(t)
-      .sort()
-      .map((dir) => ({ dir, files: (t[dir] ?? []).filter((p) => !p.endsWith(".keep")).sort() }));
+    return roots;
   }, [files]);
 
   const newFile = () => {
     const name = prompt_(
-      `New file in "${langId}/" (e.g. helper.${langById(langId)?.ext[0] ?? "txt"}):`,
+      `New file in "${cwdRef.current}/" (e.g. helper.${langById(langId)?.ext[0] ?? "txt"}):`,
     );
     if (!name || /[\\]/.test(name)) return;
-    const p = `${langId || "python"}/${name}`;
+    const p = `${cwdRef.current || langId || "python"}/${name}`;
     if (files[p] !== undefined) return flash("File already exists");
     setFiles((f) => ({ ...f, [p]: "" }));
-    setOpenFolders((o) => ({ ...o, [langId]: true }));
+    setOpenFolders((o) => ({ ...o, [cwdRef.current]: true }));
     openFile(p);
+  };
+  const newFolder = () => {
+    const folderName = prompt_("New folder name:");
+    if (!folderName || /[\\/]/.test(folderName) || folderName === "." || folderName === "..") return;
+    const parent = cwdRef.current || langId || "python";
+    const path = `${parent}/${folderName}`;
+    if (files[`${path}/.keep`] !== undefined || Object.keys(files).some((file) => file.startsWith(`${path}/`))) {
+      return flash("Folder already exists");
+    }
+    setFiles((current) => ({ ...current, [`${path}/.keep`]: "" }));
+    setOpenFolders((open) => ({ ...open, [parent]: true, [path]: true }));
+    cwdRef.current = path;
+    flash(`Created ${folderName}`);
   };
   const renameFile = (p: string) => {
     const dir = p.slice(0, p.lastIndexOf("/"));
@@ -876,7 +993,7 @@ export function IDE() {
   const snapshotPreview = async (ratio: number) => {
     const W = 1280,
       H = 720;
-    const doc = buildPreview(activeLang, filesRef.current);
+    const doc = buildPreview(activeLang, filesRef.current, activeRef.current.split("/")[0]);
     const frame = document.createElement("iframe");
     frame.setAttribute("sandbox", "allow-scripts allow-same-origin");
     frame.style.cssText = `position:fixed;left:-10000px;top:0;width:${W}px;height:${H}px;border:0;background:#fff`;
@@ -953,7 +1070,7 @@ export function IDE() {
       });
 
       if (result.ok && result.folderUrl) {
-        flash(`Uploaded ${result.filesCount} files to Google Drive (labbench/ folder)!`, result.folderUrl);
+        flash(`Uploaded ${result.filesCount} files to Google Drive (LabBench folder)!`, result.folderUrl);
       } else {
         flash(result.error || "Failed to upload to Google Drive");
       }
@@ -999,6 +1116,23 @@ export function IDE() {
       return n;
     });
     if (cwdRef.current === dir || cwdRef.current.startsWith(dir + "/")) cwdRef.current = "";
+  };
+  const renameFolder = (dir: string) => {
+    const oldName = dir.slice(dir.lastIndexOf("/") + 1);
+    const name = prompt_("Rename folder to:", oldName);
+    if (!name || name === oldName || /[\\/]/.test(name) || name === "." || name === "..") return;
+    const parent = dir.includes("/") ? dir.slice(0, dir.lastIndexOf("/")) : "";
+    const nextPath = parent ? `${parent}/${name}` : name;
+    if (Object.keys(filesRef.current).some((path) => path === `${nextPath}/.keep` || path.startsWith(`${nextPath}/`))) {
+      return flash("A folder with that name already exists");
+    }
+    const remap = (path: string) => path === dir || path.startsWith(`${dir}/`) ? `${nextPath}${path.slice(dir.length)}` : path;
+    setFiles((current) => Object.fromEntries(Object.entries(current).map(([path, content]) => [remap(path), content])));
+    filesRef.current = Object.fromEntries(Object.entries(filesRef.current).map(([path, content]) => [remap(path), content]));
+    setTabs((current) => current.map(remap));
+    if (activeRef.current === dir || activeRef.current.startsWith(`${dir}/`)) setActive(remap(activeRef.current));
+    if (cwdRef.current === dir || cwdRef.current.startsWith(`${dir}/`)) cwdRef.current = remap(cwdRef.current);
+    setOpenFolders((current) => Object.fromEntries(Object.entries(current).map(([path, open]) => [remap(path), open])));
   };
   const clearScreen = () => {
     setMore(false);
@@ -1172,66 +1306,21 @@ export function IDE() {
             <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               Explorer · Workspace
             </span>
-            <button
-              onClick={newFile}
-              title="New file"
-              className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-            >
-              <FilePlus size={14} />
-            </button>
+            <div className="flex items-center">
+              <button onClick={newFile} title="New file in selected folder" aria-label="New file" className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">
+                <FilePlus size={14} />
+              </button>
+              <button onClick={newFolder} title="New folder in selected folder" aria-label="New folder" className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">
+                <FolderPlus size={14} />
+              </button>
+            </div>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-2 text-[13px]">
-            {tree.map((g) => (
-              <div key={g.dir}>
-                <div className="group flex items-center rounded pr-1 hover:bg-muted">
-                  <button
-                    onClick={() => setOpenFolders((o) => ({ ...o, [g.dir]: !o[g.dir] }))}
-                    className="flex min-w-0 flex-1 items-center gap-1 px-2 py-1 text-left"
-                  >
-                    {openFolders[g.dir] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                    <Folder size={14} className="text-warning" />
-                    <span className="truncate">{g.dir}</span>
-                  </button>
-                  <button
-                    onClick={() => deleteFolder(g.dir)}
-                    aria-label={`Delete folder ${g.dir}`}
-                    title="Delete folder"
-                    className="rounded p-0.5 text-muted-foreground hover:text-destructive md:hidden md:group-hover:block"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-                {openFolders[g.dir] &&
-                  g.files.map((p) => (
-                    <div
-                      key={p}
-                      className={`group flex items-center gap-1.5 rounded py-1 pr-1 pl-8 ${active === p ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}
-                    >
-                      <button
-                        className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-                        onClick={() => openFile(p)}
-                      >
-                        <FileCode2 size={13} className="shrink-0 text-primary" />
-                        <span className="truncate">{p.slice(g.dir.length + 1)}</span>
-                      </button>
-                      <button
-                        onClick={() => renameFile(p)}
-                        className="hidden rounded p-0.5 text-muted-foreground hover:text-foreground group-hover:block"
-                        title="Rename"
-                      >
-                        <Pencil size={12} />
-                      </button>
-                      <button
-                        onClick={() => deleteFile(p)}
-                        className="hidden rounded p-0.5 text-muted-foreground hover:text-destructive group-hover:block"
-                        title="Delete"
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-                  ))}
-              </div>
-            ))}
+            {tree.length ? tree.map((node) => renderWorkspaceNode(node)) : (
+              <p className="px-3 py-3 text-xs leading-relaxed text-muted-foreground">
+                Your workspace is empty. Choose a language to start with a sample file, or create a file or folder here.
+              </p>
+            )}
           </div>
 
           <div className="border-t p-3">
@@ -1245,7 +1334,7 @@ export function IDE() {
             {userEmail && (
               <div
                 className={`mt-2 flex items-center gap-2 text-[11px] ${driveSyncState === "error" ? "text-destructive" : "text-muted-foreground"}`}
-                title={driveSyncState === "error" ? "Google Drive sync failed. Check Drive access and reconnect." : "Workspace snapshot is stored in Google Drive/labbench/workspace.json"}
+                title={driveSyncState === "error" ? "Google Drive sync failed. Check Drive access and reconnect." : "Workspace is synced to Google Drive/My Drive/LabBench/workspace.json"}
               >
                 <Cloud size={13} />
                 {driveSyncState === "syncing" ? "Syncing workspace…" : driveSyncState === "synced" ? "Workspace synced to Drive" : driveSyncState === "error" ? "Drive sync failed" : "Drive access needed"}
