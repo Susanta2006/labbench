@@ -87,9 +87,6 @@ function AboutPage() {
 
       <main className="mx-auto max-w-5xl space-y-14 px-5 py-10 sm:px-6 sm:py-16">
         <section className="max-w-3xl">
-          <div className="mb-4 inline-flex items-center gap-2 rounded-full border bg-card px-3 py-1 text-xs font-medium text-primary">
-            <Sparkles size={14} /> Built for student lab work
-          </div>
           <h1 className="text-4xl font-black tracking-tight sm:text-5xl">Code, learn, and finish your labs.</h1>
           <p className="mt-5 text-lg leading-relaxed text-muted-foreground">
             LabBench is a practical coding workspace for students. Write programs, run them, understand
