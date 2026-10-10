@@ -45,7 +45,7 @@ export const CORE_LANGUAGES: Language[] = [
     files: { "main.cpp": `#include <iostream>\nusing namespace std;\n\nint main() {\n    int n;\n    cout << "Enter n: ";\n    cin >> n;\n    for (int i = 1; i <= n; i++) cout << i << " squared = " << i * i << endl;\n    return 0;\n}\n` },
   },
   {
-    id: "java", ext: ["java"], label: "Java", short: "JAVA", kind: "remote", compiler: "openjdk-jdk-22+36", entry: "Main.java",
+    id: "java", ext: ["java"], label: "Java", short: "JAVA", kind: "remote", compiler: "openjdk-jdk-25+36", entry: "Main.java",
     files: { "Main.java": `import java.util.Scanner;\n\npublic class Main {\n    public static void main(String[] args) {\n        Scanner sc = new Scanner(System.in);\n        System.out.print("Enter your age: ");\n        int age = sc.nextInt();\n        System.out.println("In 10 years you will be " + (age + 10));\n    }\n}\n` },
   },
   {
