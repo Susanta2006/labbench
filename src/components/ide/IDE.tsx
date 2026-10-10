@@ -303,9 +303,6 @@ export function IDE() {
     if (l && l.id !== langId) {
       setLangId(l.id);
     }
-    if (shellWaiting.current && term.current?.isReady()) {
-      term.current.write(`\r\n${prompt()}`);
-    }
     setFailed(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, files]);
