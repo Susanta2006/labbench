@@ -11,6 +11,8 @@ export function Footer() {
           <p className="text-[11px]">Empowering students with real-time IDE & AI lab assistance.</p>
         </div>
         <div className="flex flex-wrap items-center justify-center gap-4 text-xs">
+          <a href="/about" className="transition-colors hover:text-foreground">About LabBench</a>
+          <span aria-hidden="true">•</span>
           <a href="/privacy" className="transition-colors hover:text-foreground">Privacy Policy</a>
           <span aria-hidden="true">•</span>
           <a href="/terms" className="transition-colors hover:text-foreground">Terms &amp; Conditions</a>
