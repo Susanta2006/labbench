@@ -240,6 +240,13 @@ export function IDE() {
   updatedAtRef.current = updatedAt;
   const lastRun = useRef<{ path: string; lang: string; code: string } | null>(null);
   const cwdRef = useRef("");
+  const prompt = () =>
+    `\x1b[1;32mstudent@labbench\x1b[0m:\x1b[1;34m~${cwdRef.current ? "/" + cwdRef.current : ""}\x1b[0m$ `;
+  const setTerminalDirectory = (directory: string) => {
+    if (cwdRef.current === directory) return;
+    cwdRef.current = directory;
+    if (shellWaiting.current) term.current?.redrawPrompt(prompt());
+  };
   const shellHistory = useRef<string[]>([]);
   const shellWaiting = useRef(false);
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
@@ -298,7 +305,7 @@ export function IDE() {
     const top = active.split("/")[0];
     const l = (top && languageForWorkspaceRoot(top, files)) || langForPath(active);
     const directory = active.slice(0, active.lastIndexOf("/"));
-    if (directory) cwdRef.current = directory;
+    if (directory) setTerminalDirectory(directory);
     if (l) setOpenFolders((folders) => ({ ...folders, [l.id]: true }));
     if (l && l.id !== langId) {
       setLangId(l.id);
@@ -451,7 +458,7 @@ export function IDE() {
     setActive(p);
     const directory = p.slice(0, p.lastIndexOf("/"));
     const folder = directory.split("/")[0];
-    if (directory) cwdRef.current = directory;
+    if (directory) setTerminalDirectory(directory);
     if (folder) {
       setOpenFolders((folders) => ({ ...folders, [folder]: true }));
       const language = languageForWorkspaceRoot(folder, filesRef.current);
@@ -468,7 +475,7 @@ export function IDE() {
           <button
             onClick={() => {
               setOpenFolders((open) => ({ ...open, [node.path]: !open[node.path] }));
-              cwdRef.current = node.path;
+              setTerminalDirectory(node.path);
               setLangId(languageForWorkspaceRoot(node.path.split("/")[0] || "", filesRef.current)?.id || "python");
             }}
             className="flex min-w-0 flex-1 items-center gap-1 py-1 text-left"
@@ -539,7 +546,7 @@ export function IDE() {
     setLangId(l.id);
     const knownRoots = [...new Set(Object.keys(filesRef.current).map((path) => path.split("/")[0]!))];
     const root = knownRoots.find((candidate) => languageForWorkspaceRoot(candidate, filesRef.current)?.id === l.id) ?? l.id;
-    cwdRef.current = root;
+    setTerminalDirectory(root);
     setOpenFolders((o) => ({ ...o, [root]: true }));
     const entry = `${root}/${l.entry}`;
     const existing = Object.keys(filesRef.current).find(
@@ -771,9 +778,6 @@ export function IDE() {
     });
 
   // ---------- Shell ----------
-  const prompt = () =>
-    `\x1b[1;32mstudent@labbench\x1b[0m:\x1b[1;34m~${cwdRef.current ? "/" + cwdRef.current : ""}\x1b[0m$ `;
-
   const execLine = async (line: string) => {
     const r = runShell(line, filesRef.current, cwdRef.current, shellHistory.current);
     if (r.clear) term.current?.clear();

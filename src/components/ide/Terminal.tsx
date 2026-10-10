@@ -6,6 +6,7 @@ import "@xterm/xterm/css/xterm.css";
 export interface TerminalHandle {
   write: (s: string) => void;
   clear: () => void;
+  redrawPrompt: (prompt: string) => boolean;
   readLine: (opts?: { history?: boolean }) => Promise<string | null>; // null = Ctrl+C / Ctrl+D
   injectLine: (s: string) => boolean;
   isReading: () => boolean;
@@ -124,6 +125,11 @@ export const Terminal = forwardRef<TerminalHandle, { dark: boolean; onInterrupt:
     useImperativeHandle(ref, () => ({
       write: (s) => term.current?.write(s),
       clear: () => { term.current?.clear(); term.current?.write("\x1b[2J\x1b[H"); },
+      redrawPrompt: (prompt) => {
+        if (!pending.current) return false;
+        term.current?.write(`\r\x1b[2K${prompt}${line.current}`);
+        return true;
+      },
       readLine: (opts) => new Promise((res) => {
         pending.current = res; line.current = ""; useHist.current = !!opts?.history;
         hIdx.current = history.current.length;
