@@ -47,7 +47,8 @@ import {
   type Language,
 } from "@/lib/ide/languages";
 import { removeUnusedStarterFiles, useWorkspace } from "@/lib/ide/workspace";
-import { binaryFileToBlob, fileToWorkspaceContent, isBinaryFile } from "@/lib/ide/file-content";
+import { binaryFileToBlob, decodeTemporaryUpload, encodeTemporaryUpload, fileToWorkspaceContent, isBinaryFile } from "@/lib/ide/file-content";
+import { createTemporaryUpload, getTemporaryUploadUrl } from "@/lib/ide/temporary-upload.functions";
 import { runRemote } from "@/lib/ide/run-remote.functions";
 import { askAiTa } from "@/lib/ide/ai-ta.functions";
 import { getProStatus } from "@/lib/ide/razorpay.functions";
@@ -231,6 +232,7 @@ export function IDE() {
   const [showTour, setShowTour] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [more, setMore] = useState(false);
+  const [fileDragActive, setFileDragActive] = useState(false);
   const [shareUrl, setShareUrl] = useState("");
   const [sharing, setSharing] = useState(false);
   const [userEmail, setUserEmail] = useState("");
@@ -514,6 +516,19 @@ export function IDE() {
     setDrawer(false);
     const content = filesRef.current[p];
     if (content !== undefined && isBinaryFile(content)) {
+      const temporary = decodeTemporaryUpload(content);
+      if (temporary) {
+        void getTemporaryUploadUrl({ data: { id: temporary.id } }).then((download) => {
+          if (!download) return flash("This temporary upload has expired. Upload the file again to use it.");
+          const anchor = document.createElement("a");
+          anchor.href = download.url;
+          anchor.download = download.fileName;
+          anchor.rel = "noreferrer";
+          anchor.click();
+          flash("Downloading temporary workspace file");
+        }).catch((error) => flash(`Could not download file: ${error instanceof Error ? error.message : String(error)}`));
+        return;
+      }
       const blob = binaryFileToBlob(content);
       if (blob) {
         const url = URL.createObjectURL(blob);
@@ -1002,14 +1017,15 @@ export function IDE() {
     setOpenFolders((o) => ({ ...o, [cwdRef.current]: true }));
     openFile(p);
   };
-  const uploadIntoCurrentFolder = async (selection: FileList | null) => {
+  const uploadIntoCurrentFolder = async (selection: File[] | FileList | null) => {
     if (!selection?.length) return;
+    const selectedFiles = Array.from(selection);
     const target = cwdRef.current || langId;
     if (!target) return flash("Select a folder before uploading files");
     const occupied = new Set(Object.keys(filesRef.current));
     const additions: Record<string, string> = {};
     try {
-      for (const file of Array.from(selection)) {
+      for (const file of selectedFiles) {
         const safeName = file.name.replace(/[\\/]/g, "_").trim() || "uploaded-file";
         const dot = safeName.lastIndexOf(".");
         const stem = dot > 0 ? safeName.slice(0, dot) : safeName;
@@ -1019,12 +1035,22 @@ export function IDE() {
         while (occupied.has(`${target}/${name}`)) name = `${stem} (${suffix++})${ext}`;
         const path = `${target}/${name}`;
         occupied.add(path);
-        additions[path] = await fileToWorkspaceContent(file);
+        if (file.size > 5 * 1024 * 1024) {
+          if (file.size > 50 * 1024 * 1024) throw new Error(`${file.name} is larger than the 50 MB temporary upload limit`);
+          const signed = await createTemporaryUpload({ data: { name: file.name, size: file.size, mimeType: file.type || "application/octet-stream" } });
+          const { error } = await supabase.storage.from("labbench-temporary-uploads")
+            .uploadToSignedUrl(signed.path, signed.token, file, { contentType: file.type || "application/octet-stream", upsert: false });
+          if (error) throw new Error(`Could not upload ${file.name}: ${error.message}`);
+          additions[path] = encodeTemporaryUpload(signed.id, file.type);
+        } else {
+          additions[path] = await fileToWorkspaceContent(file);
+        }
       }
       filesRef.current = { ...filesRef.current, ...additions };
       setFiles((current) => ({ ...current, ...additions }));
       setOpenFolders((open) => ({ ...open, [target]: true }));
-      flash(`${Object.keys(additions).length} file${Object.keys(additions).length === 1 ? "" : "s"} added to ${target}`);
+      const cloudCount = Object.values(additions).filter((content) => decodeTemporaryUpload(content)).length;
+      flash(`${Object.keys(additions).length} file${Object.keys(additions).length === 1 ? "" : "s"} added to ${target}${cloudCount ? ` · ${cloudCount} stored temporarily for 24 hours` : ""}`);
     } catch (error) {
       flash(`Could not upload files: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1340,7 +1366,39 @@ export function IDE() {
   }, []);
 
   return (
-    <div className="ide-root flex h-full min-h-0 flex-col bg-background text-foreground">
+    <div
+      className={`ide-root flex h-full min-h-0 flex-col bg-background text-foreground ${fileDragActive ? "ring-2 ring-inset ring-primary" : ""}`}
+      onDragEnter={(event) => {
+        if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+        event.preventDefault();
+        setFileDragActive(true);
+      }}
+      onDragOver={(event) => {
+        if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+      }}
+      onDragLeave={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        setFileDragActive(false);
+      }}
+      onDrop={(event) => {
+        if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setFileDragActive(false);
+        void uploadIntoCurrentFolder(Array.from(event.dataTransfer.files));
+      }}
+    >
+      {fileDragActive && (
+        <div className="pointer-events-none fixed inset-0 z-[60] grid place-items-center bg-background/65 p-6 backdrop-blur-[2px]">
+          <div className="rounded-xl border-2 border-dashed border-primary bg-card px-8 py-7 text-center shadow-2xl">
+            <Upload className="mx-auto mb-2 text-primary" />
+            <p className="text-sm font-semibold">Drop files to add them to</p>
+            <p className="mt-1 text-xs text-muted-foreground">{cwdRef.current || langId || "the open folder"}</p>
+          </div>
+        </div>
+      )}
       <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-rail px-2 lg:hidden">
         <Button
           variant="ghost"
@@ -1450,7 +1508,7 @@ export function IDE() {
                 className="hidden"
                 aria-label="Upload files into the open folder"
                 onChange={(event) => {
-                  const selection = event.currentTarget.files;
+                  const selection = Array.from(event.currentTarget.files ?? []);
                   event.currentTarget.value = "";
                   void uploadIntoCurrentFolder(selection);
                 }}
