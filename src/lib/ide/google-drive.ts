@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { binaryFileToBlob, decodeBinaryFile } from "./file-content";
 
 export interface DriveUploadResult {
   ok: boolean;
@@ -271,7 +272,14 @@ export async function uploadWorkspaceToGoogleDrive({
     for (const [path, content] of fileEntries) {
       // Use clean filename without the folder prefix (e.g. 'main.py' instead of 'python/main.py')
       const fileName = path.split("/").pop() || path;
-      await uploadFileToDrive(token, fileName, content, outputFolder.id, "text/plain; charset=utf-8");
+      const binary = decodeBinaryFile(content);
+      await uploadFileToDrive(
+        token,
+        fileName,
+        binary ? binaryFileToBlob(content)! : content,
+        outputFolder.id,
+        binary?.mimeType || "text/plain; charset=utf-8",
+      );
       count++;
     }
 
