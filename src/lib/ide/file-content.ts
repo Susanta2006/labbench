@@ -1,4 +1,16 @@
 const BINARY_PREFIX = "__LABBENCH_BINARY_V1__|";
+const TEMP_UPLOAD_PREFIX = "__LABBENCH_TEMP_UPLOAD_V1__|";
+
+export function encodeTemporaryUpload(id: string, mimeType: string): string {
+  return `${TEMP_UPLOAD_PREFIX}${id}|${encodeURIComponent(mimeType || "application/octet-stream")}`;
+}
+
+export function decodeTemporaryUpload(content: string): { id: string; mimeType: string } | null {
+  if (!content.startsWith(TEMP_UPLOAD_PREFIX)) return null;
+  const [id, mimeType] = content.slice(TEMP_UPLOAD_PREFIX.length).split("|");
+  if (!id || !mimeType) return null;
+  return { id, mimeType: decodeURIComponent(mimeType) || "application/octet-stream" };
+}
 
 export function encodeBinaryFile(mimeType: string, base64: string): string {
   return `${BINARY_PREFIX}${encodeURIComponent(mimeType || "application/octet-stream")}|${base64}`;
@@ -24,7 +36,7 @@ export function binaryFileToBlob(content: string): Blob | null {
 }
 
 export function isBinaryFile(content: string): boolean {
-  return content.startsWith(BINARY_PREFIX);
+  return content.startsWith(BINARY_PREFIX) || content.startsWith(TEMP_UPLOAD_PREFIX);
 }
 
 export async function fileToWorkspaceContent(file: File): Promise<string> {
