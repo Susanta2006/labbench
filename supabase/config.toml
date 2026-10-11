@@ -1,4 +1,4 @@
-project_id = "qsqphefazuvzckxitzim"
+project_id = "qefqugtyrhjjhwtcgrsu"
 
 [functions.cleanup-temporary-uploads]
 verify_jwt = false
