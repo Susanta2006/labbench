@@ -41,6 +41,7 @@ export const Terminal = forwardRef<TerminalHandle, { dark: boolean; onInterrupt:
     const line = useRef("");
     const history = useRef<string[]>([]);
     const hIdx = useRef(0);
+    const touchY = useRef<number | null>(null);
     const interruptRef = useRef(onInterrupt);
     interruptRef.current = onInterrupt;
 
@@ -156,14 +157,33 @@ export const Terminal = forwardRef<TerminalHandle, { dark: boolean; onInterrupt:
         onWheelCapture={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          const lines =
+          const rows =
             event.deltaMode === WheelEvent.DOM_DELTA_LINE
               ? event.deltaY
               : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
-                ? event.deltaY * 20
-                : event.deltaY / 40;
-          term.current?.scrollLines(Math.sign(lines) * Math.max(1, Math.round(Math.abs(lines))));
+                ? event.deltaY * 24
+                : event.deltaY / 17.5;
+          term.current?.scrollLines(rows);
         }}
+        onTouchStart={(event) => {
+          touchY.current = event.touches.length === 1 ? event.touches[0]!.clientY : null;
+        }}
+        onTouchMove={(event) => {
+          if (touchY.current === null || event.touches.length !== 1) {
+            touchY.current = null;
+            return;
+          }
+          const nextY = event.touches[0]!.clientY;
+          const deltaY = touchY.current - nextY;
+          if (deltaY) {
+            event.preventDefault();
+            term.current?.scrollLines(deltaY / 17.5);
+            touchY.current = nextY;
+          }
+        }}
+        onTouchEnd={() => { touchY.current = null; }}
+        onTouchCancel={() => { touchY.current = null; }}
+        style={{ touchAction: "none", overscrollBehavior: "contain" }}
       />
     );
   },

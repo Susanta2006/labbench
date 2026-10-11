@@ -47,6 +47,7 @@ import {
   type Language,
 } from "@/lib/ide/languages";
 import { removeUnusedStarterFiles, useWorkspace } from "@/lib/ide/workspace";
+import { binaryFileToBlob, fileToWorkspaceContent, isBinaryFile } from "@/lib/ide/file-content";
 import { runRemote } from "@/lib/ide/run-remote.functions";
 import { askAiTa } from "@/lib/ide/ai-ta.functions";
 import { getProStatus } from "@/lib/ide/razorpay.functions";
@@ -69,7 +70,20 @@ type InstallPromptEvent = Event & {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
 const DAILY_CREDITS = 5;
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+};
+const parseDailyCredits = (raw: string | null): { date: string; used: number } | null => {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as { date?: unknown; used?: unknown };
+    if (typeof value.date !== "string" || typeof value.used !== "number" || !Number.isFinite(value.used)) return null;
+    return { date: value.date, used: Math.max(0, Math.min(DAILY_CREDITS, Math.floor(value.used))) };
+  } catch {
+    return null;
+  }
+};
 const PREVIEW_BRIDGE = `<script>
 (() => {
   const format = (value) => {
@@ -231,6 +245,7 @@ export function IDE() {
   const sab = useRef<SharedArrayBuffer | null>(null);
   const nodeWorker = useRef<Worker | null>(null);
   const captureRef = useRef<HTMLDivElement>(null);
+  const uploadInput = useRef<HTMLInputElement>(null);
   const previewFrame = useRef<HTMLIFrameElement>(null);
   const abortRef = useRef(false);
   const doneRef = useRef<(() => void) | null>(null);
@@ -427,12 +442,54 @@ export function IDE() {
     try {
       const l = localStorage.getItem("labbench.langs");
       if (l) setAddedLangs(JSON.parse(l));
-      const c = localStorage.getItem("labbench.aiCredits");
-      if (c) setCredits(JSON.parse(c));
+      const storedCredits = parseDailyCredits(localStorage.getItem("labbench.aiCredits"));
+      const currentDate = today();
+      const currentCredits = storedCredits?.date === currentDate ? storedCredits : { date: currentDate, used: 0 };
+      setCredits(currentCredits);
+      localStorage.setItem("labbench.aiCredits", JSON.stringify(currentCredits));
       setInkSaver(localStorage.getItem("labbench.ink") === "1");
     } catch {
       /* */
     }
+  }, []);
+  useEffect(() => {
+    let timer = 0;
+    const refresh = () => {
+      const currentDate = today();
+      let savedCredits: { date: string; used: number } | null = null;
+      try { savedCredits = parseDailyCredits(localStorage.getItem("labbench.aiCredits")); } catch { /* use in-memory credits */ }
+      if (savedCredits?.date === currentDate) {
+        setCredits(savedCredits);
+      } else {
+        const next = { date: currentDate, used: 0 };
+        setCredits(next);
+        try { localStorage.setItem("labbench.aiCredits", JSON.stringify(next)); } catch { /* in-memory reset still applies */ }
+      }
+    };
+    const scheduleMidnightCheck = () => {
+      if (timer) window.clearTimeout(timer);
+      const now = new Date();
+      const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
+      timer = window.setTimeout(() => {
+        refresh();
+        scheduleMidnightCheck();
+      }, Math.max(100, midnight - now.getTime() + 50));
+    };
+    const refreshWhenActive = () => {
+      if (document.visibilityState === "visible") refresh();
+      scheduleMidnightCheck();
+    };
+    refresh();
+    scheduleMidnightCheck();
+    window.addEventListener("focus", refreshWhenActive);
+    document.addEventListener("visibilitychange", refreshWhenActive);
+    window.addEventListener("storage", refresh);
+    return () => {
+      if (timer) window.clearTimeout(timer);
+      window.removeEventListener("focus", refreshWhenActive);
+      document.removeEventListener("visibilitychange", refreshWhenActive);
+      window.removeEventListener("storage", refresh);
+    };
   }, []);
   useEffect(() => {
     localStorage.setItem("labbench.ink", inkSaver ? "1" : "0");
@@ -455,6 +512,20 @@ export function IDE() {
 
   const openFile = (p: string) => {
     setDrawer(false);
+    const content = filesRef.current[p];
+    if (content !== undefined && isBinaryFile(content)) {
+      const blob = binaryFileToBlob(content);
+      if (blob) {
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = p.split("/").pop() || "download";
+        anchor.click();
+        setTimeout(() => URL.revokeObjectURL(url), 30_000);
+        flash("Downloaded binary file");
+      }
+      return;
+    }
     setActive(p);
     const directory = p.slice(0, p.lastIndexOf("/"));
     const folder = directory.split("/")[0];
@@ -931,6 +1002,33 @@ export function IDE() {
     setOpenFolders((o) => ({ ...o, [cwdRef.current]: true }));
     openFile(p);
   };
+  const uploadIntoCurrentFolder = async (selection: FileList | null) => {
+    if (!selection?.length) return;
+    const target = cwdRef.current || langId;
+    if (!target) return flash("Select a folder before uploading files");
+    const occupied = new Set(Object.keys(filesRef.current));
+    const additions: Record<string, string> = {};
+    try {
+      for (const file of Array.from(selection)) {
+        const safeName = file.name.replace(/[\\/]/g, "_").trim() || "uploaded-file";
+        const dot = safeName.lastIndexOf(".");
+        const stem = dot > 0 ? safeName.slice(0, dot) : safeName;
+        const ext = dot > 0 ? safeName.slice(dot) : "";
+        let name = safeName;
+        let suffix = 2;
+        while (occupied.has(`${target}/${name}`)) name = `${stem} (${suffix++})${ext}`;
+        const path = `${target}/${name}`;
+        occupied.add(path);
+        additions[path] = await fileToWorkspaceContent(file);
+      }
+      filesRef.current = { ...filesRef.current, ...additions };
+      setFiles((current) => ({ ...current, ...additions }));
+      setOpenFolders((open) => ({ ...open, [target]: true }));
+      flash(`${Object.keys(additions).length} file${Object.keys(additions).length === 1 ? "" : "s"} added to ${target}`);
+    } catch (error) {
+      flash(`Could not upload files: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
   const newFolder = () => {
     if (!langId) return flash("Select a language first");
     const folderName = prompt_("New folder name:");
@@ -1028,9 +1126,45 @@ export function IDE() {
     if (!shot) throw new Error("Nothing to capture");
     return shot;
   };
+  const snapshotWithPlots = async (ratio = 2) => {
+    const base = await snapshot(ratio);
+    if (isWeb || images.length === 0) return base;
+    const loadImage = (src: string) => new Promise<HTMLImageElement>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("Could not capture a plot image"));
+      image.src = src;
+    });
+    const [terminalImage, ...plots] = await Promise.all([base, ...images].map(loadImage));
+    const padding = Math.round(24 * ratio);
+    const labelHeight = Math.round(28 * ratio);
+    const plotSizes = plots.map((plot) => {
+      const scale = Math.min(ratio, (terminalImage.naturalWidth - padding * 2) / plot.naturalWidth);
+      return { width: Math.round(plot.naturalWidth * scale), height: Math.round(plot.naturalHeight * scale) };
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = terminalImage.naturalWidth;
+    canvas.height = terminalImage.naturalHeight + padding + plotSizes.reduce((height, size) => height + labelHeight + size.height + padding, 0);
+    const context = canvas.getContext("2d");
+    if (!context) return base;
+    context.fillStyle = inkSaver ? "#ffffff" : "#1e1e1e";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(terminalImage, 0, 0);
+    let top = terminalImage.naturalHeight + padding;
+    plots.forEach((plot, index) => {
+      const size = plotSizes[index]!;
+      context.fillStyle = inkSaver ? "#57606a" : "#9da7b3";
+      context.font = `${Math.round(14 * ratio)}px sans-serif`;
+      context.fillText(`Plot ${index + 1}`, padding, top + Math.round(18 * ratio));
+      top += labelHeight;
+      context.drawImage(plot, padding, top, size.width, size.height);
+      top += size.height + padding;
+    });
+    return canvas.toDataURL("image/png");
+  };
   const downloadPng = async () => {
     try {
-      const png = await snapshot();
+      const png = await snapshotWithPlots();
       const a = document.createElement("a");
       a.href = png;
       a.download = `${currentFolder() || "labbench"}-output-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.png`;
@@ -1058,7 +1192,7 @@ export function IDE() {
       // 1. Capture the 16:9 output snapshot
       let shot: string | null = null;
       try {
-        shot = await snapshot(1.5);
+        shot = await snapshotWithPlots(1.5);
       } catch (err) {
         console.warn("Could not capture screenshot:", err);
       }
@@ -1088,8 +1222,9 @@ export function IDE() {
     try {
       let image: string | null = null;
       try {
-        image = await snapshot(1.5);
-        if (image.length > 3_900_000) image = await snapshot(1);
+        image = await snapshotWithPlots(1.5);
+        if (image.length > 3_900_000) image = await snapshotWithPlots(1);
+        if (image.length > 3_900_000) image = await snapshotWithPlots(0.6);
       } catch {
         image = null;
       }
@@ -1308,6 +1443,21 @@ export function IDE() {
               Explorer · Workspace
             </span>
             <div className="flex items-center">
+              <input
+                ref={uploadInput}
+                type="file"
+                multiple
+                className="hidden"
+                aria-label="Upload files into the open folder"
+                onChange={(event) => {
+                  const selection = event.currentTarget.files;
+                  event.currentTarget.value = "";
+                  void uploadIntoCurrentFolder(selection);
+                }}
+              />
+              <button onClick={() => uploadInput.current?.click()} title={`Upload files to ${cwdRef.current || "the open folder"}`} aria-label="Upload files" className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">
+                <Upload size={14} />
+              </button>
               <button onClick={newFile} title="New file in selected folder" aria-label="New file" className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">
                 <FilePlus size={14} />
               </button>
