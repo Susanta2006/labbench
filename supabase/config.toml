@@ -1,1 +1,4 @@
 project_id = "qsqphefazuvzckxitzim"
+
+[functions.cleanup-temporary-uploads]
+verify_jwt = false
