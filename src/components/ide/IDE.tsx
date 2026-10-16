@@ -121,79 +121,129 @@ function buildAiCode(lang: Language, path: string, files: Record<string, string>
 function buildPreview(lang: Language, files: Record<string, string>, root = lang.id, activePath?: string) {
   const inFolder = (n: string) => files[`${root}/${n}`];
   if (lang.kind === "react") {
-    const jsxFiles = Object.keys(files).filter((p) => p.startsWith(`${root}/`) && p.endsWith(".jsx"));
-    // Prefer app.jsx when it exists; otherwise use the first available JSX file.
-    const entryPath = (activePath && activePath.startsWith(`${root}/`) && activePath.endsWith(".jsx") && files[activePath] !== undefined ? activePath : undefined) ??
-      (files[`${root}/app.jsx`] !== undefined
-       ? `${root}/app.jsx` : undefined) ?? jsxFiles[0];
-    const source = entryPath ? files[entryPath] : "";
-    // These files run as one Babel script, so resolve React imports against the UMD globals
-    // and remove module boundaries that cannot exist in the combined preview.
-    const jsx = source
-      .replace(
-        /^\s*import\s+(?:([\s\S]*?)\s+from\s+)?(["'])([^"']+)\2\s*;?\s*$/gm,
-        (_statement, clause: string | undefined, _quote: string, moduleName: string) => {
-          if (moduleName === "react" || moduleName === "react-dom" || moduleName === "react-dom/client") {
-            const globalName = moduleName === "react" ? "React" : "ReactDOM";
-            const bindings = clause?.trim();
-            if (!bindings) return "";
-            const defaultBinding = bindings.match(/^([\w$]+)(?=\s*(?:,|$))/)?.[1];
-            const namespaceBinding = bindings.match(/\*\s+as\s+([\w$]+)/)?.[1];
-            const namedBindings = bindings.match(/\{([\s\S]*?)\}/)?.[1];
-            const lines: string[] = [];
-            if (defaultBinding) lines.push(`const ${defaultBinding} = window.${globalName};`);
-            if (namespaceBinding) lines.push(`const ${namespaceBinding} = window.${globalName};`);
-            if (namedBindings) {
-              const properties = namedBindings.replace(/\b([\w$]+)\s+as\s+([\w$]+)\b/g, "$1: $2");
-              lines.push(`const {${properties}} = window.${globalName};`);
-            }
-            return lines.join("\n");
-          }
-          // Local JSX/CSS is combined below; other packages are unavailable in this browser preview.
-          return "";
-        },
-      )
-      .replace(/^\s*export\s+\*\s*(?:as\s+[\w$]+\s*)?from\s+["'][^"']+["']\s*;?\s*$/gm, "")
-      .replace(/^\s*export\s+default\s+/gm, "")
-      .replace(/^\s*export\s+(?=(?:async\s+)?(?:function|class|const|let|var)\b)/gm, "")
-      .replace(/^\s*export\s*\{[^}]*\}(?:\s+from\s+["'][^"']+["'])?\s*;?\s*$/gm, "");
-    const css = Object.keys(files)
-      .filter((p) => p.startsWith(`${root}/`) && p.endsWith(".css"))
-      .map((p) => files[p])
-      .join("\n");
-    return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${css}</style>
+    const projectFiles = Object.keys(files).filter(
+      (path) => path.startsWith(`${root}/`) && !path.endsWith("/.keep"),
+    );
+    const jsxFiles = projectFiles.filter((path) => /\.(jsx|js|tsx|ts)$/.test(path));
+    // The preview entry point is independent of the currently active editor tab.
+    const entryPath =
+      (files[`${root}/App.jsx`] !== undefined ? `${root}/App.jsx` : undefined) ??
+      (files[`${root}/app.jsx`] !== undefined ? `${root}/app.jsx` : undefined) ??
+      (files[`${root}/App.js`] !== undefined ? `${root}/App.js` : undefined) ??
+      (files[`${root}/app.js`] !== undefined ? `${root}/app.js` : undefined) ??
+      (activePath && activePath.startsWith(`${root}/`) && files[activePath] !== undefined
+        ? activePath
+        : undefined) ??
+      jsxFiles[0];
+
+    const modules: Record<string, string> = {};
+    for (const path of projectFiles) {
+      if (/\.(jsx|js|tsx|ts|css)$/.test(path)) modules[path] = files[path];
+    }
+
+    const modulePayload = JSON.stringify(modules).replace(/</g, "\\u003c");
+    const entryPayload = JSON.stringify(entryPath ?? "");
+    return `<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>html,body,#root{min-height:100%;}body{margin:0;}${""}</style>
 <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
 <script src="https://cdn.tailwindcss.com"></script>${PREVIEW_BRIDGE}</head><body><div id="root"></div>
-<script>window.onerror=(m)=>{document.body.insertAdjacentHTML('beforeend','<pre style="color:#b00020;padding:12px">'+m+'</pre>')}</script>
-<script>Babel.registerPreset("labbench-react", {presets: [[Babel.availablePresets.react, {runtime: "classic"}]]});</script>
-<script type="text/babel" data-type="module" data-presets="labbench-react">${jsx.replace(/<\/script>/g, "<\\/script>")}
-try {
-  const rootElement = document.getElementById("root");
+<script>
+(() => {
+  const rawModules = ${modulePayload};
+  const entryPath = ${entryPayload};
+  const moduleCache = Object.create(null);
+  const cssLoaded = new Set();
 
-  if (!rootElement) {
-    throw new Error("React preview root element was not found.");
+  function showError(error) {
+    console.error("React preview failed:", error);
+    let panel = document.getElementById("labbench-preview-error");
+    if (!panel) {
+      panel = document.createElement("pre");
+      panel.id = "labbench-preview-error";
+      panel.style.cssText = "color:#b00020;background:#fff5f5;padding:12px;margin:12px;white-space:pre-wrap;overflow:auto;";
+      document.body.appendChild(panel);
+    }
+    panel.textContent = error && (error.stack || error.message) || String(error);
   }
 
-  if (typeof App === "undefined") {
-    throw new Error(
-      "No App component found. Define a component named App and export it as default."
-    );
+  function normalizePath(path) {
+    const parts = [];
+    for (const part of path.replace(/\\\\/g, "/").split("/")) {
+      if (!part || part === ".") continue;
+      if (part === "..") parts.pop();
+      else parts.push(part);
+    }
+    return parts.join("/");
   }
 
-  ReactDOM.createRoot(rootElement).render(
-    React.createElement(App)
-  );
-} catch (error) {
-  console.error("React preview failed:", error);
-  const errorElement = document.createElement("pre");
-  errorElement.style.cssText =
-    "color:#b00020;padding:12px;white-space:pre-wrap;";
-  errorElement.textContent =
-    error instanceof Error ? error.stack || error.message : String(error);
-  document.body.appendChild(errorElement);
-}
+  function resolveModule(fromPath, request) {
+    if (!request.startsWith(".")) return request;
+    const base = normalizePath(fromPath.split("/").slice(0, -1).concat(request).join("/"));
+    const candidates = /\\.[a-z0-9]+$/i.test(base)
+      ? [base]
+      : [base, base + ".jsx", base + ".js", base + ".tsx", base + ".ts", base + ".css",
+         base + "/index.jsx", base + "/index.js", base + "/index.tsx", base + "/index.ts"];
+    const found = candidates.find((candidate) => Object.prototype.hasOwnProperty.call(rawModules, candidate));
+    if (!found) throw new Error('Cannot resolve "' + request + '" imported from "' + fromPath + '". Check the filename and letter casing.');
+    return found;
+  }
+
+  function loadModule(request, fromPath) {
+    if (request === "react") return { __esModule: true, default: React, ...React };
+    if (request === "react-dom") return { __esModule: true, default: ReactDOM, ...ReactDOM };
+    if (request === "react-dom/client") {
+      return { __esModule: true, default: ReactDOM, createRoot: ReactDOM.createRoot.bind(ReactDOM) };
+    }
+    if (!request.startsWith(".")) {
+      throw new Error('Package "' + request + '" is not supported yet. Stage 1 supports local imports and CSS.');
+    }
+
+    const resolved = resolveModule(fromPath, request);
+    if (resolved.endsWith(".css")) {
+      if (!cssLoaded.has(resolved)) {
+        cssLoaded.add(resolved);
+        const style = document.createElement("style");
+        style.dataset.labbenchCss = resolved;
+        style.textContent = rawModules[resolved];
+        document.head.appendChild(style);
+      }
+      return {};
+    }
+    if (moduleCache[resolved]) return moduleCache[resolved].exports;
+
+    const module = { exports: {} };
+    moduleCache[resolved] = module;
+    const source = rawModules[resolved];
+    const transformed = Babel.transform(source, {
+      filename: resolved,
+      presets: [["react", { runtime: "classic" }]],
+      plugins: ["transform-modules-commonjs"],
+      sourceType: "module"
+    }).code;
+    const localRequire = (name) => loadModule(name, resolved);
+    try {
+      new Function("require", "module", "exports", "React", "ReactDOM", transformed)(
+        localRequire, module, module.exports, React, ReactDOM
+      );
+    } catch (error) {
+      delete moduleCache[resolved];
+      throw error;
+    }
+    return module.exports;
+  }
+
+  try {
+    if (!entryPath) throw new Error("No React entry file found. Create App.jsx or app.jsx.");
+    const entry = loadModule("./" + entryPath.split("/").slice(1).join("/"), entryPath);
+    const App = entry && (entry.default || entry.App || entry);
+    if (!App) throw new Error("The entry file did not export a React component.");
+    ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+  } catch (error) {
+    showError(error);
+  }
+})();
 </script></body></html>`;
   }
   let html = inFolder(lang.entry) ?? "<h1>No index.html</h1>";
