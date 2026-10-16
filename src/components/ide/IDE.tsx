@@ -166,7 +166,33 @@ function buildPreview(lang: Language, files: Record<string, string>, root = lang
 <script src="https://cdn.tailwindcss.com"></script>${PREVIEW_BRIDGE}</head><body><div id="root"></div>
 <script>window.onerror=(m)=>{document.body.insertAdjacentHTML('beforeend','<pre style="color:#b00020;padding:12px">'+m+'</pre>')}</script>
 <script>Babel.registerPreset("labbench-react", {presets: [[Babel.availablePresets.react, {runtime: "classic"}]]});</script>
-<script type="text/babel" data-type="module" data-presets="labbench-react">${jsx.replace(/<\/script>/g, "<\\/script>")}</script></body></html>`;
+<script type="text/babel" data-type="module" data-presets="labbench-react">${jsx.replace(/<\/script>/g, "<\\/script>")}
+try {
+  const rootElement = document.getElementById("root");
+
+  if (!rootElement) {
+    throw new Error("React preview root element was not found.");
+  }
+
+  if (typeof App === "undefined") {
+    throw new Error(
+      "No App component found. Define a component named App and export it as default."
+    );
+  }
+
+  ReactDOM.createRoot(rootElement).render(
+    React.createElement(App)
+  );
+} catch (error) {
+  console.error("React preview failed:", error);
+  const errorElement = document.createElement("pre");
+  errorElement.style.cssText =
+    "color:#b00020;padding:12px;white-space:pre-wrap;";
+  errorElement.textContent =
+    error instanceof Error ? error.stack || error.message : String(error);
+  document.body.appendChild(errorElement);
+}
+</script></body></html>`;
   }
   let html = inFolder(lang.entry) ?? "<h1>No index.html</h1>";
   html = html.replace(/<link[^>]*href=["']([^"']+)["'][^>]*>/g, (m, href) =>
