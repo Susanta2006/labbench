@@ -118,12 +118,14 @@ function buildAiCode(lang: Language, path: string, files: Record<string, string>
   return files[path] ?? "";
 }
 
-function buildPreview(lang: Language, files: Record<string, string>, root = lang.id) {
+function buildPreview(lang: Language, files: Record<string, string>, root = lang.id, activePath?: string) {
   const inFolder = (n: string) => files[`${root}/${n}`];
   if (lang.kind === "react") {
     const jsxFiles = Object.keys(files).filter((p) => p.startsWith(`${root}/`) && p.endsWith(".jsx"));
     // Prefer app.jsx when it exists; otherwise use the first available JSX file.
-    const entryPath = jsxFiles.find((p) => p === `${root}/app.jsx`) ?? jsxFiles[0];
+    const entryPath = (activePath && activePath.startsWith(`${root}/`) && activePath.endsWith(".jsx") && files[activePath] !== undefined ? activePath : undefined) ??
+      (files[`${root}/app.jsx`] !== undefined
+       ? `${root}/app.jsx` : undefined) ?? jsxFiles[0];
     const source = entryPath ? files[entryPath] : "";
     // These files run as one Babel script, so resolve React imports against the UMD globals
     // and remove module boundaries that cannot exist in the combined preview.
@@ -865,7 +867,7 @@ export function IDE() {
         outputLog.current = "";
         lastRun.current = { path, lang: l.label, code: buildAiCode(l, path, fs) };
         setFailed(false);
-        setPreviewDoc(buildPreview(l, fs, path.split("/")[0]));
+        setPreviewDoc(buildPreview(activeLang, files, active.split("/")[0], active));
         setOutTab("preview");
         write(`\x1b[90mOpened live preview for ${path}\x1b[0m\r\n`);
         resolve();
@@ -940,7 +942,7 @@ export function IDE() {
       outputLog.current = "";
       lastRun.current = { path, lang: activeLang.label, code: buildAiCode(activeLang, path, files) };
       setFailed(false);
-      setPreviewDoc(buildPreview(activeLang, files, path.split("/")[0]));
+      setPreviewDoc(buildPreview(activeLang, files, path.split("/")[0], path));
       setOutTab("preview");
       write(`\x1b[90mOpened live preview for ${path}\x1b[0m\r\n`);
       return;
