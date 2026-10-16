@@ -125,16 +125,42 @@ function buildPreview(lang: Language, files: Record<string, string>, root = lang
       (path) => path.startsWith(`${root}/`) && !path.endsWith("/.keep"),
     );
     const jsxFiles = projectFiles.filter((path) => /\.(jsx|js|tsx|ts)$/.test(path));
-    // The preview entry point is independent of the currently active editor tab.
-    const entryPath =
-      (files[`${root}/App.jsx`] !== undefined ? `${root}/App.jsx` : undefined) ??
-      (files[`${root}/app.jsx`] !== undefined ? `${root}/app.jsx` : undefined) ??
-      (files[`${root}/App.js`] !== undefined ? `${root}/App.js` : undefined) ??
-      (files[`${root}/app.js`] !== undefined ? `${root}/app.js` : undefined) ??
+    // Prefer conventional entry points. If none exists, infer the app entry as
+    // a JS/JSX module that is not imported by another local module. This keeps
+    // selecting a leaf component (for example Greeting.jsx) from rendering it
+    // directly without the props its parent normally supplies.
+    const conventionalEntry =
+      [`${root}/App.jsx`, `${root}/app.jsx`, `${root}/App.js`, `${root}/app.js`,
+       `${root}/index.jsx`, `${root}/index.js`, `${root}/main.jsx`, `${root}/main.js`]
+        .find((path) => files[path] !== undefined);
+    const importedLocalFiles = new Set<string>();
+    for (const path of jsxFiles) {
+      const source = files[path] ?? "";
+      const importPattern = /(?:from\s*|import\s*)["'](\.{1,2}\/[^"']+)["']/g;
+      let match: RegExpExecArray | null;
+      while ((match = importPattern.exec(source))) {
+        const request = match[1];
+        const base = `${path.split("/").slice(0, -1).join("/")}/${request}`;
+        const normalizedParts: string[] = [];
+        for (const part of base.replace(/\\/g, "/").split("/")) {
+          if (!part || part === ".") continue;
+          if (part === "..") normalizedParts.pop();
+          else normalizedParts.push(part);
+        }
+        const normalized = normalizedParts.join("/");
+        const candidates = /\.[a-z0-9]+$/i.test(normalized)
+          ? [normalized]
+          : [normalized, normalized + ".jsx", normalized + ".js", normalized + ".tsx", normalized + ".ts",
+             normalized + "/index.jsx", normalized + "/index.js"];
+        const resolved = candidates.find((candidate) => jsxFiles.includes(candidate));
+        if (resolved) importedLocalFiles.add(resolved);
+      }
+    }
+    const inferredEntry = jsxFiles.find((path) => !importedLocalFiles.has(path));
+    const entryPath = conventionalEntry ?? inferredEntry ??
       (activePath && activePath.startsWith(`${root}/`) && files[activePath] !== undefined
         ? activePath
-        : undefined) ??
-      jsxFiles[0];
+        : undefined) ?? jsxFiles[0];
 
     const modules: Record<string, string> = {};
     for (const path of projectFiles) {
@@ -216,9 +242,12 @@ function buildPreview(lang: Language, files: Record<string, string>, root = lang
     const module = { exports: {} };
     moduleCache[resolved] = module;
     const source = rawModules[resolved];
+    const isTypeScript = /\.(ts|tsx)$/.test(resolved);
     const transformed = Babel.transform(source, {
       filename: resolved,
-      presets: [["react", { runtime: "classic" }]],
+      presets: isTypeScript
+        ? [["typescript", { allExtensions: true, isTSX: /\.tsx$/.test(resolved) }], ["react", { runtime: "classic" }]]
+        : [["react", { runtime: "classic" }]],
       plugins: ["transform-modules-commonjs"],
       sourceType: "module"
     }).code;
