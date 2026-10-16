@@ -121,9 +121,9 @@ function buildAiCode(lang: Language, path: string, files: Record<string, string>
 function buildPreview(lang: Language, files: Record<string, string>, root = lang.id) {
   const inFolder = (n: string) => files[`${root}/${n}`];
   if (lang.kind === "react") {
-    const source = Object.keys(files).filter((p) => p.startsWith(`${root}/`) && p.endsWith(".jsx"));
+    const jsxFiles = Object.keys(files).filter((p) => p.startsWith(`${root}/`) && p.endsWith(".jsx"));
     // Prefer app.jsx when it exists; otherwise use the first available JSX file.
-    const entryPath = source.find((p) => p === `${root}/app.jsx`) ?? jsxFiles[0];
+    const entryPath = jsxFiles.find((p) => p === `${root}/app.jsx`) ?? jsxFiles[0];
     const source = entryPath ? files[entryPath] : "";
     // These files run as one Babel script, so resolve React imports against the UMD globals
     // and remove module boundaries that cannot exist in the combined preview.
