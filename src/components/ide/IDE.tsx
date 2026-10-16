@@ -1146,7 +1146,7 @@ export function IDE() {
   const snapshotPreview = async (ratio: number) => {
     const W = 1280,
       H = 720;
-    const doc = buildPreview(activeLang, filesRef.current, activeRef.current.split("/")[0]);
+    const doc = buildPreview(activeLang, filesRef.current, activeRef.current.split("/")[0], activeRef.current);
     const frame = document.createElement("iframe");
     frame.setAttribute("sandbox", "allow-scripts allow-same-origin");
     frame.style.cssText = `position:fixed;left:-10000px;top:0;width:${W}px;height:${H}px;border:0;background:#fff`;
