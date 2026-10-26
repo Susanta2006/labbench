@@ -29,6 +29,16 @@ const applicationStructuredData = {
     name: "Susanta Banik",
     url: "https://susanta-banik.vercel.app",
   },
+  "author": {
+    "@type": "Person",
+    "name": "Susanta Banik",
+    "url": "https://susanta-banik.vercel.app/"
+  },
+  "creator": {
+    "@type": "Person",
+    "name": "Susanta Banik",
+    "url": "https://susanta-banik.vercel.app/"
+  },
   featureList: [
     "Online code editor and compiler for C, C++, Java, Python, and Web development",
     "Save code output screenshots for lab reports",
