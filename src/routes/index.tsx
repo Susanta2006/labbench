@@ -15,7 +15,15 @@ export const Route = createFileRoute("/")({
       {
         name: "keywords",
         content:
-          "online compiler, C++ online editor, python compiler, lab report output generator, student code editor, labbench, C language compiler",
+          "online compiler, Susanta Banik, C++ online editor, python compiler, lab report output generator, student code editor, labbench, C language compiler",
+      },
+      {
+        name: "Author",
+        content: "Susanta Banik",
+      },
+      {
+        property: "og",
+        content: "Labbench — Developed by Susanta Banik",
       },
       { property: "og:type", content: "website" },
       { property: "og:title", content: "LabBench — Code Anywhere, Submit Everywhere" },
