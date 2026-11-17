@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build",
-    "build:dev": "vite build --mode development",
+    "build": "node scripts/stamp-sw.mjs && vite build",
+    "build:dev": "node scripts/stamp-sw.mjs && vite build --mode development",
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "prettier --write .",
@@ -100,6 +100,7 @@
     "postgres": "^3.4.9",
     "prettier": "^3.9.9",
     "pyodide": "^0.26.4",
+    "sql.js": "^1.13.0",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.56.1",
     "vite": "8.1.5",

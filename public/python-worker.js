@@ -35,6 +35,34 @@ async function initInner() {
     },
     isatty: true,
   });
+  // Browser Python cannot run shell commands (os.system returns 32512, "command not found").
+  // Explain that once, instead of letting a ping check silently report a false "DOWN".
+  // `ping <host>` cannot run in the browser. It is answered with the browser's own internet check
+  // (taken just before the run and passed in as __lb_internet), so the result matches the desktop
+  // output. Redirections such as "> /dev/null 2>&1" are ignored, as in the desktop shell.
+  // Private or local addresses cannot be checked from a browser, so they report "not reachable".
+  pyodide.runPython(`
+import os, platform, re, sys, ipaddress
+_lb_system = os.system
+def _lb_os_system(cmd):
+    tokens = re.split(r"\\s[12]?>", cmd)[0].split()
+    if tokens and tokens[0] == "ping" and len(tokens) > 1:
+        host = tokens[-1]
+        try:
+            private = ipaddress.ip_address(host).is_private
+        except ValueError:
+            private = False
+        if private:
+            print("LabBench note: the browser cannot ping private or local address %s." % host, file=sys.stderr)
+            return 1
+        return 0 if __lb_internet else 1
+    r = _lb_system(cmd)
+    if r != 0 and platform.system() == "Emscripten":
+        print("LabBench note: os.system() cannot run programs in the browser Python runtime (returned %d, command not found). Use the internet status shown above the terminal instead." % r, file=sys.stderr)
+    return r
+os.system = _lb_os_system
+__lb_internet = False
+`);
   return pyodide;
 }
 
@@ -110,6 +138,7 @@ self.onmessage = async (e) => {
   const first = !msg.attempt;
   replayInputs = msg.inputs ? [...msg.inputs] : null;
   needInput = false;
+  py.globals.set("__lb_internet", !!msg.internet);
   const entry = msg.entry || "main.py";
   // The project as it exists on disk; the entry file always reflects the code being run.
   const files = { ...(msg.files || {}), [entry]: msg.code };
@@ -147,7 +176,13 @@ _r`);
     postMessage(needInput ? { type: "need-input" } : { type: "done", code: 0 });
   } catch (err) {
     if (needInput) { postMessage({ type: "need-input" }); return; }
-    out("err", String(err.message || err) + "\n");
+    const msg = String(err.message || err);
+    if (/No module named 'tkinter'/.test(msg)) {
+      out("err", "tkinter (desktop GUI library) is not available in the browser Python runtime. Build GUI practicals with HTML, CSS and JavaScript in the Web preview instead.\n");
+    } else if (/No module named 'psutil'/.test(msg)) {
+      out("err", "psutil needs direct operating-system access, which the browser Python runtime does not have. Use platform and time information instead.\n");
+    }
+    out("err", msg + "\n");
     postMessage({ type: "done", code: 1 });
   }
 };

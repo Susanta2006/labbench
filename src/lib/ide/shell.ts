@@ -1,3 +1,4 @@
+import { connectivityLabel } from "./connectivity";
 // A small Linux-like shell over the virtual workspace, for practising commands.
 import type { Files } from "./workspace";
 
@@ -88,6 +89,7 @@ function globToRegex(glob: string): RegExp {
 }
 
 const BUILTINS = [
+  "netstatus",
   "ls",
   "cd",
   "pwd",
@@ -133,6 +135,7 @@ export const HELP = `${C.b}LabBench shell — practice Linux commands${C.r}
   sort [-rnu] file   uniq file   cut -d<delim> -f<list> file   tr <set1> <set2> file
   diff a b   find [dir] [-name <glob>] [-type f|d]   basename p [suffix]   dirname p
   which <cmd>   head/tail [-n N] file
+  netstatus   show whether you are online (browser, LabBench server, internet)
   clear   history   whoami   hostname   date   uname [-a]   help
   ${C.b}Run code:${C.r} run [file] · python file.py · node file.js · gcc/g++ file · java File.java
   ${C.b}Python packages:${C.r} pip install numpy pandas · pip list
@@ -371,6 +374,8 @@ export function runShell(input: string, files: Files, cwd: string, history: stri
       }
       return { out: "", action: { type: "run", arg: [] } };
     }
+    case "netstatus":
+      return { out: connectivityLabel() + "\n" };
     case "sort": {
       if (!pos.length) return err("sort: missing file operand");
       const name = pos[pos.length - 1]!;

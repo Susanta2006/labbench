@@ -1,12 +1,9 @@
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { z } from "zod";
-
-const SYSTEM = `You are LabBench AI, a patient friendly teaching assistant for college programming students, across all programming languages.
-Introduce yourself as LabBench AI, and your developer Mr. Susanta Banik and greet to students all these in 20-30 words in a friendly and simple plain english tone.
-Explain the syntax/logic error concept in simple friendly English under 150 words.
-Help interpret the provided code and any compiler output, terminal output, browser preview output, or successful program result. If no output is provided, explain what the code is doing or suggest one useful concept to inspect. Use simple English and stay under 150 words. Do NOT provide or write corrected code.
-You may point to a line number and explain a concept (such as a missing delimiter, off-by-one error, type mismatch, or unexpected runtime result). Give a hint about what to check. Never output a code block or a fixed version of the program.`;
+import { diagnose, type Finding } from "./diagnose";
+import { buildTaPrompt, fallbackText, TA_SYSTEM } from "./ai-prompt";
+import { askGemini, withSources } from "./gemini-search";
 
 const TRANSIENT_STATUSES = new Set([408, 429, 500, 502, 503, 504]);
 
@@ -25,7 +22,7 @@ function configuredProviders(): Provider[] {
       name: "Gemini",
       endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
       key: geminiKey,
-      model: process.env["GEMINI_MODEL"] || "gemini-3.8-flash",
+      model: process.env["GEMINI_MODEL"] || "gemini-2.5-flash",
     });
   }
   const openRouterKey = process.env["OPENROUTER_API_KEY"];
@@ -51,7 +48,7 @@ async function requestCompletion(provider: Provider, prompt: string): Promise<Re
           model: provider.model,
           stream: true,
           messages: [
-            { role: "system", content: SYSTEM },
+            { role: "system", content: TA_SYSTEM },
             { role: "user", content: prompt },
           ],
         }),
@@ -107,14 +104,6 @@ async function readStream(response: Response): Promise<string> {
   return text.replace(/```[\s\S]*?```/g, "[code removed — try writing the fix yourself!]").trim();
 }
 
-function fallbackHint() {
-  return {
-    ok: true as const,
-    fallback: true as const,
-    text: "I can’t reach right now, so this is a general troubleshooting hint rather than a diagnosis: start with the first compiler or terminal error, check the named line and the line just before it, then verify spelling, punctuation, and expected types or values. Fix one issue at a time and run the program again.",
-  };
-}
-
 export const askAiTa = createServerFn({ method: "POST" })
   .inputValidator((d) =>
     z
@@ -122,6 +111,8 @@ export const askAiTa = createServerFn({ method: "POST" })
         language: z.string().max(40),
         code: z.string().max(20_000),
         output: z.string().max(8_000),
+        exitCode: z.number().int().nullable().optional(),
+        stdin: z.string().max(2_000).optional(),
       })
       .parse(d),
   )
@@ -135,31 +126,79 @@ export const askAiTa = createServerFn({ method: "POST" })
       const key = process.env["SUPABASE_PUBLISHABLE_KEY"];
       if (!url || !key) throw new Error("Supabase is not configured.");
       const { createClient } = await import("@supabase/supabase-js");
-      const authClient = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+      const authClient = createClient(url, key, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
       const { data: claims, error: claimsError } = await authClient.auth.getClaims(token);
       const userId = claims?.claims?.sub;
-      if (claimsError || typeof userId !== "string") throw new Error("Please sign in again to use the AI assistant.");
+      if (claimsError || typeof userId !== "string")
+        throw new Error("Please sign in again to use the AI assistant.");
       const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-      const { data: allowance, error: allowanceError } = await (supabaseAdmin as any).rpc("consume_ai_credit", { p_user_id: userId });
+      const admin = supabaseAdmin as unknown as {
+        rpc: (
+          name: string,
+          args: Record<string, unknown>,
+        ) => Promise<{ data: unknown; error: { message: string } | null }>;
+      };
+      const { data: allowance, error: allowanceError } = await admin.rpc("consume_ai_credit", {
+        p_user_id: userId,
+      });
       if (allowanceError) {
         console.error("AI allowance check failed:", allowanceError.message);
         throw new Error("Could not verify your AI allowance. Please try again.");
       }
       const result = Array.isArray(allowance) ? allowance[0] : allowance;
-      if (!result?.allowed) return { ok: false as const, error: "You’ve used your 5 free AI hints for today. Upgrade to Pro for unlimited hints." };
+      if (!result?.allowed)
+        return {
+          ok: false as const,
+          error: "You’ve used your 5 free AI hints for today. Upgrade to Pro for unlimited hints.",
+        };
     }
+    const exitCode = data.exitCode ?? null;
+    const findings: Finding[] = diagnose({
+      language: data.language,
+      code: data.code,
+      output: data.output,
+      exitCode,
+      ...(data.stdin !== undefined ? { stdin: data.stdin } : {}),
+    });
+    const prompt = buildTaPrompt({
+      language: data.language,
+      code: data.code,
+      output: data.output,
+      exitCode,
+      stdin: data.stdin,
+      findings,
+    });
     const providers = configuredProviders();
-    const prompt = `Language: ${data.language}\n\nCode:\n${data.code}\n\nCompiler/terminal output:\n${data.output}`;
     for (const provider of providers) {
+      // Gemini answers with Google Search available; the model searches only when it needs to.
+      if (provider.name === "Gemini") {
+        const answer = await askGemini(fetch, {
+          apiKey: provider.key,
+          model: provider.model,
+          system: TA_SYSTEM,
+          prompt,
+        });
+        if (answer?.text) {
+          return {
+            ok: true as const,
+            fallback: false as const,
+            text: withSources(answer.text, answer.sources),
+            findings,
+          };
+        }
+        continue;
+      }
       const response = await requestCompletion(provider, prompt);
       if (!response) continue;
       try {
         const text = await readStream(response);
-        if (text) return { ok: true as const, fallback: false as const, text };
+        if (text) return { ok: true as const, fallback: false as const, text, findings };
         console.error(`AI TA ${provider.name} returned an empty response.`);
       } catch (error) {
         console.error(`AI TA ${provider.name} stream failed:`, error);
       }
     }
-    return fallbackHint();
+    return { ok: true as const, fallback: true as const, text: fallbackText(findings), findings };
   });

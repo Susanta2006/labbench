@@ -13,6 +13,7 @@ import { useEffect, type ReactNode } from "react";
 import appCss from "../styles.css?url";
 import { reportError } from "../lib/error-reporting";
 import { CookieBanner } from "@/components/CookieBanner";
+import { UpdateBanner } from "@/components/ide/UpdateBanner";
 import { Footer } from "@/components/Footer";
 
 const applicationStructuredData = {
@@ -162,14 +163,6 @@ function RootShell({ children }: { children: ReactNode }) {
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
 
-  useEffect(() => {
-    if ("serviceWorker" in navigator) {
-      void navigator.serviceWorker.register("/sw.js").catch((error) => {
-        console.info("Offline cache is unavailable in this browser session.", error);
-      });
-    }
-  }, []);
-
   return (
     <QueryClientProvider client={queryClient}>
       <div className="app-shell flex h-[100dvh] flex-col overflow-hidden">
@@ -180,6 +173,7 @@ function RootComponent() {
         <Footer />
       </div>
       <CookieBanner />
+      <UpdateBanner />
     </QueryClientProvider>
   );
 }

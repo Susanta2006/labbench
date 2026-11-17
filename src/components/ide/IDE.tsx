@@ -52,7 +52,11 @@ import { createTemporaryUpload, getTemporaryUploadUrl } from "@/lib/ide/temporar
 import { runRemote } from "@/lib/ide/run-remote.functions";
 import { projectFilesFor, relativeTo } from "@/lib/ide/project-files";
 import { buildNodeWorkerSource } from "@/lib/ide/node-runtime";
+import { NetworkStatus } from "@/components/ide/NetworkStatus";
+import { buildSqlWorkerSource } from "@/lib/ide/sql-core";
+import { probeInternetNow } from "@/lib/ide/connectivity";
 import { askAiTa } from "@/lib/ide/ai-ta.functions";
+import { diagnose, type Finding } from "@/lib/ide/diagnose";
 import { getProStatus } from "@/lib/ide/razorpay.functions";
 import { formatCode } from "@/lib/ide/format";
 import { runShell } from "@/lib/ide/shell";
@@ -323,7 +327,7 @@ export function IDE() {
   const [addedLangs, setAddedLangs] = useState<string[]>([]);
   const [showAdd, setShowAdd] = useState(false);
   const [failed, setFailed] = useState(false);
-  const [ai, setAi] = useState<{ open: boolean; loading: boolean; text: string; error: string }>({
+  const [ai, setAi] = useState<{ open: boolean; loading: boolean; text: string; error: string; findings?: Finding[] }>({
     open: false,
     loading: false,
     text: "",
@@ -349,6 +353,7 @@ export function IDE() {
   const pyWorker = useRef<Worker | null>(null);
   const sab = useRef<SharedArrayBuffer | null>(null);
   const nodeWorker = useRef<Worker | null>(null);
+  const sqlWorker = useRef<Worker | null>(null);
   const captureRef = useRef<HTMLDivElement>(null);
   const uploadInput = useRef<HTMLInputElement>(null);
   const previewFrame = useRef<HTMLIFrameElement>(null);
@@ -359,6 +364,9 @@ export function IDE() {
   const updatedAtRef = useRef(updatedAt);
   updatedAtRef.current = updatedAt;
   const lastRun = useRef<{ path: string; lang: string; code: string } | null>(null);
+  // Exit status and remote input of the latest run, used by the AI tutor and the rule-based diagnosis.
+  const lastExit = useRef<number | null>(null);
+  const lastStdin = useRef<string | undefined>(undefined);
   const cwdRef = useRef("");
   const prompt = () =>
     `\x1b[1;32mstudent@labbench\x1b[0m:\x1b[1;34m~${cwdRef.current ? "/" + cwdRef.current : ""}\x1b[0m$ `;
@@ -764,6 +772,7 @@ export function IDE() {
 
   // ---------- Runners ----------
   const finish = (code: number) => {
+    lastExit.current = code;
     setExitCode(code);
     setStatus(code === 0 ? "done" : code === 130 ? "stopped" : "error");
     const isFail = code !== 0 && code !== 130;
@@ -791,11 +800,12 @@ export function IDE() {
     () => () => {
       pyWorker.current?.terminate();
       nodeWorker.current?.terminate();
+      sqlWorker.current?.terminate();
     },
     [],
   );
 
-  const runPython = (code: string, project: Record<string, string>, entry: string) => {
+  const runPython = (code: string, project: Record<string, string>, entry: string, internet: boolean) => {
     const w = pyWorker.current ?? spawnPython();
     const inputs: string[] = [];
     let seen = 0,
@@ -830,10 +840,10 @@ export function IDE() {
         inputs.push(v);
         seen = 0;
         attempt++;
-        w.postMessage({ type: "run", code, files: project, entry, inputs, attempt });
+        w.postMessage({ type: "run", code, files: project, entry, inputs, attempt, internet });
       } else if (m.type === "done") finish(m.code);
     };
-    w.postMessage({ type: "run", code, files: project, entry, inputs: sab.current ? null : inputs, attempt });
+    w.postMessage({ type: "run", code, files: project, entry, inputs: sab.current ? null : inputs, attempt, internet });
   };
 
   const pip = (pkgs: string[], list = false) =>
@@ -849,8 +859,27 @@ export function IDE() {
       w.postMessage({ type: "pip", pkgs, list });
     });
 
+  // SQL runs locally in SQLite (sql.js). Each run starts with a fresh database.
+  const runSqlLocal = (script: string) => {
+    sqlWorker.current?.terminate();
+    const w = new Worker(URL.createObjectURL(new Blob([buildSqlWorkerSource(window.location.origin)], { type: "text/javascript" })));
+    sqlWorker.current = w;
+    w.onmessage = (e) => {
+      const m = e.data;
+      if (m.type === "out") write(m.text);
+      else if (m.type === "err") write(`\x1b[31m${m.text}\x1b[0m`);
+      else if (m.type === "done") {
+        finish(m.code);
+        w.terminate();
+        sqlWorker.current = null;
+      }
+    };
+    w.postMessage({ script });
+  };
+
   const runNode = (files: Record<string, string>, entry: string) => {
     nodeWorker.current?.terminate();
+    sqlWorker.current?.terminate();
     const w = new Worker(URL.createObjectURL(new Blob([NODE_WORKER], { type: "text/javascript" })));
     nodeWorker.current = w;
     w.onmessage = (e) => {
@@ -887,6 +916,7 @@ export function IDE() {
     for (let round = 0; round < 80; round++) {
       let r: Awaited<ReturnType<typeof runRemoteFn>>;
       try {
+        lastStdin.current = stdin;
         r = await runRemoteFn({ data: { compiler: l.compiler!, language: l.id, code, stdin, extraFiles, entry } });
       } catch (e) {
         write(`\x1b[31m${String(e)}\x1b[0m\r\n`);
@@ -921,6 +951,7 @@ export function IDE() {
     pyWorker.current?.terminate();
     pyWorker.current = null;
     nodeWorker.current?.terminate();
+    sqlWorker.current?.terminate();
     nodeWorker.current = null;
     if (!shellWaiting.current) term.current?.cancelRead();
     write("\x1b[90m[Process interrupted]\x1b[0m\r\n");
@@ -934,6 +965,8 @@ export function IDE() {
       const l = languageForWorkspaceRoot(path.split("/")[0] ?? "", fs) ?? langForPath(path);
       // Windows CRLF / old-Mac CR endings make Bash fail with "$'\r': command not found".
       const code = (fs[path] ?? "").replace(/\r\n?/g, "\n");
+      lastExit.current = null;
+      lastStdin.current = undefined;
       if (!l) {
         write(`\x1b[31mDon't know how to run ${path}\x1b[0m\r\n`);
         resolve();
@@ -964,7 +997,11 @@ export function IDE() {
       doneRef.current = resolve;
       if (l.kind === "python") {
         const root = path.split("/")[0] ?? "";
-        runPython(code, projectFilesFor(root, fs), relativeTo(root, path));
+        // Check the internet first so `ping` in the script reports the same result as the desktop.
+        void probeInternetNow().then((internet) => runPython(code, projectFilesFor(root, fs), relativeTo(root, path), internet));
+      }
+      else if (l.id === "sql") {
+        runSqlLocal(code);
       }
       else if (l.kind === "node") {
         const root = path.split("/")[0] ?? "";
@@ -1440,13 +1477,24 @@ export function IDE() {
     }
     const lr = lastRun.current;
     if (!lr) return;
-    setAi({ open: true, loading: true, text: "", error: "" });
+    const output = stripAnsi(outputLog.current).slice(-8000);
+    // Findings appear at once and cost no credit; the AI tutor adds its explanation on top.
+    const findings = diagnose({
+      language: lr.lang,
+      code: lr.code.slice(0, 20000),
+      output,
+      exitCode: lastExit.current,
+      ...(lastStdin.current !== undefined ? { stdin: lastStdin.current } : {}),
+    });
+    setAi({ open: true, loading: true, text: "", error: "", findings });
     try {
       const r = await askAiFn({
         data: {
           language: lr.lang,
           code: lr.code.slice(0, 20000),
-          output: stripAnsi(outputLog.current).slice(-8000),
+          output,
+          exitCode: lastExit.current,
+          ...(lastStdin.current !== undefined ? { stdin: lastStdin.current } : {}),
         },
       });
       if (r.ok) {
@@ -1455,10 +1503,10 @@ export function IDE() {
           setCredits(next);
           localStorage.setItem("labbench.aiCredits", JSON.stringify(next));
         }
-        setAi({ open: true, loading: false, text: r.text, error: "" });
-      } else setAi({ open: true, loading: false, text: "", error: r.error });
+        setAi({ open: true, loading: false, text: r.text, error: "", findings: r.findings });
+      } else setAi({ open: true, loading: false, text: "", error: r.error, findings });
     } catch (e) {
-      setAi({ open: true, loading: false, text: "", error: String(e) });
+      setAi({ open: true, loading: false, text: "", error: String(e), findings });
     }
   };
 
@@ -1894,6 +1942,7 @@ export function IDE() {
                 className={`absolute inset-0 flex flex-col ${outTab === "terminal" ? "" : "invisible"} ${inkSaver ? "bg-paper" : "bg-editor"}`}
                 onClick={() => term.current?.focus()}
               >
+                <NetworkStatus />
                 <div className="min-h-0 flex-1">
                   <Terminal ref={term} dark={!inkSaver} onInterrupt={() => stopRef.current()} />
                 </div>
@@ -1930,6 +1979,22 @@ export function IDE() {
                       <X size={14} />
                     </button>
                   </div>
+                  {ai.findings && ai.findings.length > 0 && (
+                    <div className="mb-3 space-y-2 rounded-md border border-border bg-muted/40 p-2">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        What LabBench found
+                      </div>
+                      {ai.findings.map((f, i) => (
+                        <div key={i} className="text-sm">
+                          <span className="font-semibold text-card-foreground">
+                            {f.line ? `Line ${f.line}: ` : ""}
+                            {f.title}.
+                          </span>{" "}
+                          <span className="text-card-foreground/90">{f.detail}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {ai.loading ? (
                     <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
                       <Loader2 size={14} className="animate-spin" /> Reviewing your code and output…
