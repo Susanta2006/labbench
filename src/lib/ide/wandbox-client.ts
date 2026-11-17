@@ -150,6 +150,30 @@ class __LbReader : System.IO.TextReader { System.IO.TextReader o; public __LbRea
  public override string ReadLine() { var s = o.ReadLine(); if (s == null) Need(); return s; } }
 `;
 
+// Bash `read` prompting. The runner's stdin is not a terminal, so Bash prints no `read -p`
+// prompt. This one-line wrapper prints the prompt itself and, at end of input, asks the IDE for
+// more input with the same marker the C and Java runners use. It is placed on line 1 with a `;`
+// so line numbers in the user's script don't change.
+const BASH_PRELUDE =
+  'read() { local __lb_pr= __lb_nx= __lb_s; for __lb_s in "$@"; do ' +
+  'if [ -n "$__lb_nx" ]; then __lb_pr=$__lb_s; __lb_nx=; continue; fi; ' +
+  "case $__lb_s in -*p*) __lb_nx=1 ;; esac; done; " +
+  'if [ -n "$__lb_pr" ]; then printf \'%s\' "$__lb_pr"; fi; ' +
+  `builtin read "$@" || { printf '%s' '${MARK}'; exit 0; }; }; `;
+
+// Input redirection or heredoc on a line that reads or ends a loop. Such scripts read from a
+// file or here-string, so end of input is normal and must not trigger a prompt.
+const BASH_INPUT_REDIRECT = /(^|[\s;|&(])(<<|<\s*[\w"'$/~.(])/;
+
+/** True when the script reads from the program's own input, so the prompt wrapper should apply. */
+export function bashNeedsReadPrompt(code: string): boolean {
+  if (!/\bread\b/.test(code)) return false;
+  if (/\|\s*(while|read)\b/.test(code)) return false;
+  return !code
+    .split("\n")
+    .some((line) => /\b(read|done)\b/.test(line) && BASH_INPUT_REDIRECT.test(line));
+}
+
 export function instrument(compiler: string, code: string): { code: string; interactive: boolean } {
   if (compiler.endsWith("-c"))
     return { code: C_PRELUDE + '#line 1 "main.c"\n' + code, interactive: true };
@@ -170,6 +194,9 @@ export function instrument(compiler: string, code: string): { code: string; inte
     const at = last.index + last[0].length;
     const ctor = ` static ${last[1]}() { System.Console.SetIn(new __LbReader(System.Console.In)); } `;
     return { code: code.slice(0, at) + ctor + code.slice(at) + CS_READER, interactive: true };
+  }
+  if (compiler.startsWith("bash") && bashNeedsReadPrompt(code)) {
+    return { code: BASH_PRELUDE + code, interactive: true };
   }
   return { code, interactive: false };
 }
