@@ -50,6 +50,8 @@ import { removeUnusedStarterFiles, useWorkspace } from "@/lib/ide/workspace";
 import { binaryFileToBlob, decodeTemporaryUpload, encodeTemporaryUpload, fileToWorkspaceContent, isBinaryFile } from "@/lib/ide/file-content";
 import { createTemporaryUpload, getTemporaryUploadUrl } from "@/lib/ide/temporary-upload.functions";
 import { runRemote } from "@/lib/ide/run-remote.functions";
+import { projectFilesFor, relativeTo } from "@/lib/ide/project-files";
+import { buildNodeWorkerSource } from "@/lib/ide/node-runtime";
 import { askAiTa } from "@/lib/ide/ai-ta.functions";
 import { getProStatus } from "@/lib/ide/razorpay.functions";
 import { formatCode } from "@/lib/ide/format";
@@ -302,13 +304,7 @@ function languageForWorkspaceRoot(root: string, files: Record<string, string>): 
   return undefined;
 }
 
-const NODE_WORKER = `
-const fmt = a => a.map(x => typeof x === 'string' ? x : (()=>{try{return JSON.stringify(x,null,2)}catch{return String(x)}})()).join(' ');
-console.log = (...a) => postMessage({type:'out', text: fmt(a)+'\\n'});
-console.info = console.log;
-console.error = console.warn = (...a) => postMessage({type:'err', text: fmt(a)+'\\n'});
-onmessage = async e => { try { await (new Function('return (async()=>{'+e.data+'\\n})()'))(); postMessage({type:'done',code:0}); }
- catch(err){ postMessage({type:'err', text: String(err && err.stack || err)+'\\n'}); postMessage({type:'done',code:1}); } };`;
+const NODE_WORKER = buildNodeWorkerSource();
 
 export function IDE() {
   const { files, setFiles, saved, saveNow, loaded, updatedAt, setUpdatedAt } = useWorkspace();
@@ -799,7 +795,7 @@ export function IDE() {
     [],
   );
 
-  const runPython = (code: string) => {
+  const runPython = (code: string, project: Record<string, string>, entry: string) => {
     const w = pyWorker.current ?? spawnPython();
     const inputs: string[] = [];
     let seen = 0,
@@ -834,10 +830,10 @@ export function IDE() {
         inputs.push(v);
         seen = 0;
         attempt++;
-        w.postMessage({ type: "run", code, inputs, attempt });
+        w.postMessage({ type: "run", code, files: project, entry, inputs, attempt });
       } else if (m.type === "done") finish(m.code);
     };
-    w.postMessage({ type: "run", code, inputs: sab.current ? null : inputs, attempt });
+    w.postMessage({ type: "run", code, files: project, entry, inputs: sab.current ? null : inputs, attempt });
   };
 
   const pip = (pkgs: string[], list = false) =>
@@ -853,7 +849,7 @@ export function IDE() {
       w.postMessage({ type: "pip", pkgs, list });
     });
 
-  const runNode = (code: string) => {
+  const runNode = (files: Record<string, string>, entry: string) => {
     nodeWorker.current?.terminate();
     const w = new Worker(URL.createObjectURL(new Blob([NODE_WORKER], { type: "text/javascript" })));
     nodeWorker.current = w;
@@ -867,10 +863,10 @@ export function IDE() {
         nodeWorker.current = null;
       }
     };
-    w.postMessage(code);
+    w.postMessage({ files, entry });
   };
 
-  const runCompiled = async (l: Language, code: string) => {
+  const runCompiled = async (l: Language, code: string, extraFiles: Record<string, string>, entry: string) => {
     let stdin = "";
     let shown = 0;
     const interactiveCapable = /^(gcc|clang|openjdk|mono|dotnet)/.test(l.compiler ?? "");
@@ -891,7 +887,7 @@ export function IDE() {
     for (let round = 0; round < 80; round++) {
       let r: Awaited<ReturnType<typeof runRemoteFn>>;
       try {
-        r = await runRemoteFn({ data: { compiler: l.compiler!, language: l.id, code, stdin } });
+        r = await runRemoteFn({ data: { compiler: l.compiler!, language: l.id, code, stdin, extraFiles, entry } });
       } catch (e) {
         write(`\x1b[31m${String(e)}\x1b[0m\r\n`);
         finish(1);
@@ -936,7 +932,8 @@ export function IDE() {
       saveNow();
       const fs = filesRef.current;
       const l = languageForWorkspaceRoot(path.split("/")[0] ?? "", fs) ?? langForPath(path);
-      const code = fs[path] ?? "";
+      // Windows CRLF / old-Mac CR endings make Bash fail with "$'\r': command not found".
+      const code = (fs[path] ?? "").replace(/\r\n?/g, "\n");
       if (!l) {
         write(`\x1b[31mDon't know how to run ${path}\x1b[0m\r\n`);
         resolve();
@@ -965,9 +962,22 @@ export function IDE() {
       setStatus("running");
       setExitCode(null);
       doneRef.current = resolve;
-      if (l.kind === "python") runPython(code);
-      else if (l.kind === "node") runNode(code);
-      else void runCompiled(l, code);
+      if (l.kind === "python") {
+        const root = path.split("/")[0] ?? "";
+        runPython(code, projectFilesFor(root, fs), relativeTo(root, path));
+      }
+      else if (l.kind === "node") {
+        const root = path.split("/")[0] ?? "";
+        const entry = relativeTo(root, path);
+        runNode({ ...projectFilesFor(root, fs), [entry]: code }, entry);
+      }
+      else {
+        const root = path.split("/")[0] ?? "";
+        const entry = relativeTo(root, path);
+        const extraFiles = projectFilesFor(root, fs);
+        delete extraFiles[entry];
+        void runCompiled(l, code, extraFiles, entry);
+      }
     });
 
   // ---------- Shell ----------

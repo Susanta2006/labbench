@@ -9,6 +9,9 @@ let needInput = false;
 const dec = new TextDecoder();
 const out = (type, text) => postMessage({ type, text });
 
+// Where the active project's files are mounted inside Pyodide's virtual filesystem.
+const PROJECT = "/home/pyodide/project";
+
 let initP = null;
 function init() { return (initP ??= initInner()); }
 async function initInner() {
@@ -33,6 +36,37 @@ async function initInner() {
     isatty: true,
   });
   return pyodide;
+}
+
+/*
+ * Replace the previous project with the current one. Every run gets a fresh copy so
+ * edits and deleted files are picked up and stale modules never leak between runs.
+ * `files` maps project-relative paths (e.g. "utils/helpers.py") to text content.
+ */
+function mountProject(py, files, entry) {
+  py.runPython(`
+import os, shutil, sys
+_root = ${JSON.stringify(PROJECT)}
+for _m in list(sys.modules):
+    _f = getattr(sys.modules[_m], "__file__", None) or ""
+    if _f.startswith(_root + "/"):
+        del sys.modules[_m]
+shutil.rmtree(_root, ignore_errors=True)
+os.makedirs(_root, exist_ok=True)
+`);
+  for (const [rel, content] of Object.entries(files)) {
+    const full = `${PROJECT}/${rel}`;
+    py.FS.mkdirTree(full.slice(0, full.lastIndexOf("/")));
+    py.FS.writeFile(full, content);
+  }
+  const entryDir = `${PROJECT}/${entry}`.split("/").slice(0, -1).join("/");
+  py.FS.chdir(PROJECT);
+  py.runPython(`
+import sys
+for _p in [${JSON.stringify(entryDir)}, ${JSON.stringify(PROJECT)}]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+`);
 }
 
 async function pipInstall(py, pkgs, quiet) {
@@ -76,23 +110,29 @@ self.onmessage = async (e) => {
   const first = !msg.attempt;
   replayInputs = msg.inputs ? [...msg.inputs] : null;
   needInput = false;
+  const entry = msg.entry || "main.py";
+  // The project as it exists on disk; the entry file always reflects the code being run.
+  const files = { ...(msg.files || {}), [entry]: msg.code };
   let code = msg.code;
   const pkgs = [];
   code = code.replace(/^\s*[!%]pip\s+install\s+(.+)$/gm, (_, list) => {
     pkgs.push(...list.split(/\s+/).filter((x) => x && !x.startsWith("-")));
     return "";
   });
+  files[entry] = code;
+  const allSource = Object.values(files).join("\n");
   try {
     if (pkgs.length) await pipInstall(py, pkgs, !first);
-    await py.loadPackagesFromImports(code, {
+    await py.loadPackagesFromImports(allSource, {
       messageCallback: (m) => { if (first && /^Load/.test(m)) out("status", m.replace(/^Loading/, "Installing")); },
       errorCallback: () => {},
     });
-    if (/matplotlib/.test(code)) await py.runPythonAsync("import matplotlib\nmatplotlib.use('Agg')");
+    mountProject(py, files, entry);
+    if (/matplotlib/.test(allSource)) await py.runPythonAsync("import matplotlib\nmatplotlib.use('Agg')");
     const g = py.globals.get("dict")();
     g.set("__name__", "__main__");
     await py.runPythonAsync(code, { globals: g });
-    if (/matplotlib/.test(code)) {
+    if (/matplotlib/.test(allSource)) {
       const imgs = await py.runPythonAsync(`
 import io, base64
 import matplotlib.pyplot as _plt
