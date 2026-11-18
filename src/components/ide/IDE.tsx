@@ -47,7 +47,13 @@ import {
   type Language,
 } from "@/lib/ide/languages";
 import { removeUnusedStarterFiles, useWorkspace } from "@/lib/ide/workspace";
-import { binaryFileToBlob, decodeTemporaryUpload, encodeTemporaryUpload, fileToWorkspaceContent, isBinaryFile } from "@/lib/ide/file-content";
+import {
+  binaryFileToBlob,
+  decodeTemporaryUpload,
+  encodeTemporaryUpload,
+  fileToWorkspaceContent,
+  isBinaryFile,
+} from "@/lib/ide/file-content";
 import { createTemporaryUpload, getTemporaryUploadUrl } from "@/lib/ide/temporary-upload.functions";
 import { runRemote } from "@/lib/ide/run-remote.functions";
 import { projectFilesFor, relativeTo } from "@/lib/ide/project-files";
@@ -57,14 +63,14 @@ import { buildSqlWorkerSource } from "@/lib/ide/sql-core";
 import { probeInternetNow } from "@/lib/ide/connectivity";
 import { askAiTa } from "@/lib/ide/ai-ta.functions";
 import { diagnose, type Finding } from "@/lib/ide/diagnose";
+import { planCreate, planRename } from "@/lib/ide/workspace-paths";
+import { pickPreviewPage } from "@/lib/ide/preview-page";
+import { pngFileName, shareOrDownload } from "@/lib/ide/share-output";
 import { getProStatus } from "@/lib/ide/razorpay.functions";
 import { formatCode } from "@/lib/ide/format";
 import { runShell } from "@/lib/ide/shell";
 import { Terminal, type TerminalHandle } from "./Terminal";
-import {
-  syncWorkspaceWithGoogleDrive,
-  uploadWorkspaceToGoogleDrive,
-} from "@/lib/ide/google-drive";
+import { syncWorkspaceWithGoogleDrive, uploadWorkspaceToGoogleDrive } from "@/lib/ide/google-drive";
 import { ProModal } from "./ProModal";
 import { WalkthroughTour } from "./WalkthroughTour";
 
@@ -85,7 +91,12 @@ const parseDailyCredits = (raw: string | null): { date: string; used: number } |
   if (!raw) return null;
   try {
     const value = JSON.parse(raw) as { date?: unknown; used?: unknown };
-    if (typeof value.date !== "string" || typeof value.used !== "number" || !Number.isFinite(value.used)) return null;
+    if (
+      typeof value.date !== "string" ||
+      typeof value.used !== "number" ||
+      !Number.isFinite(value.used)
+    )
+      return null;
     return { date: value.date, used: Math.max(0, Math.min(DAILY_CREDITS, Math.floor(value.used))) };
   } catch {
     return null;
@@ -124,7 +135,13 @@ function buildAiCode(lang: Language, path: string, files: Record<string, string>
   return files[path] ?? "";
 }
 
-function buildPreview(lang: Language, files: Record<string, string>, root = lang.id, activePath?: string) {
+function buildPreview(
+  lang: Language,
+  files: Record<string, string>,
+  root = lang.id,
+  activePath?: string,
+  page?: string,
+) {
   const inFolder = (n: string) => files[`${root}/${n}`];
   if (lang.kind === "react") {
     const projectFiles = Object.keys(files).filter(
@@ -135,10 +152,16 @@ function buildPreview(lang: Language, files: Record<string, string>, root = lang
     // a JS/JSX module that is not imported by another local module. This keeps
     // selecting a leaf component (for example Greeting.jsx) from rendering it
     // directly without the props its parent normally supplies.
-    const conventionalEntry =
-      [`${root}/App.jsx`, `${root}/app.jsx`, `${root}/App.js`, `${root}/app.js`,
-       `${root}/index.jsx`, `${root}/index.js`, `${root}/main.jsx`, `${root}/main.js`]
-        .find((path) => files[path] !== undefined);
+    const conventionalEntry = [
+      `${root}/App.jsx`,
+      `${root}/app.jsx`,
+      `${root}/App.js`,
+      `${root}/app.js`,
+      `${root}/index.jsx`,
+      `${root}/index.js`,
+      `${root}/main.jsx`,
+      `${root}/main.js`,
+    ].find((path) => files[path] !== undefined);
     const importedLocalFiles = new Set<string>();
     for (const path of jsxFiles) {
       const source = files[path] ?? "";
@@ -156,17 +179,27 @@ function buildPreview(lang: Language, files: Record<string, string>, root = lang
         const normalized = normalizedParts.join("/");
         const candidates = /\.[a-z0-9]+$/i.test(normalized)
           ? [normalized]
-          : [normalized, normalized + ".jsx", normalized + ".js", normalized + ".tsx", normalized + ".ts",
-             normalized + "/index.jsx", normalized + "/index.js"];
+          : [
+              normalized,
+              normalized + ".jsx",
+              normalized + ".js",
+              normalized + ".tsx",
+              normalized + ".ts",
+              normalized + "/index.jsx",
+              normalized + "/index.js",
+            ];
         const resolved = candidates.find((candidate) => jsxFiles.includes(candidate));
         if (resolved) importedLocalFiles.add(resolved);
       }
     }
     const inferredEntry = jsxFiles.find((path) => !importedLocalFiles.has(path));
-    const entryPath = conventionalEntry ?? inferredEntry ??
+    const entryPath =
+      conventionalEntry ??
+      inferredEntry ??
       (activePath && activePath.startsWith(`${root}/`) && files[activePath] !== undefined
         ? activePath
-        : undefined) ?? jsxFiles[0];
+        : undefined) ??
+      jsxFiles[0];
 
     const modules: Record<string, string> = {};
     for (const path of projectFiles) {
@@ -281,7 +314,8 @@ function buildPreview(lang: Language, files: Record<string, string>, root = lang
 })();
 </script></body></html>`;
   }
-  let html = inFolder(lang.entry) ?? "<h1>No index.html</h1>";
+  const pageName = page ?? lang.entry;
+  let html = inFolder(pageName) ?? `<h1>No ${pageName} in this folder</h1>`;
   html = html.replace(/<link[^>]*href=["']([^"']+)["'][^>]*>/g, (m, href) =>
     inFolder(href) !== undefined ? `<style>${inFolder(href)}</style>` : m,
   );
@@ -290,16 +324,22 @@ function buildPreview(lang: Language, files: Record<string, string>, root = lang
       ? `<script${a}>${inFolder(src)!.replace(/<\/script>/g, "<\\/script>")}</script>`
       : m,
   );
-  if (/<head(?:\s[^>]*)?>/i.test(html)) html = html.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}${PREVIEW_BRIDGE}`);
+  if (/<head(?:\s[^>]*)?>/i.test(html))
+    html = html.replace(/<head(?:\s[^>]*)?>/i, (head) => `${head}${PREVIEW_BRIDGE}`);
   else html = html.replace(/<body(?:\s[^>]*)?>/i, (body) => `${PREVIEW_BRIDGE}${body}`);
   return html;
 }
 
-function languageForWorkspaceRoot(root: string, files: Record<string, string>): Language | undefined {
+function languageForWorkspaceRoot(
+  root: string,
+  files: Record<string, string>,
+): Language | undefined {
   const known = langById(root);
   if (known) return known;
   if (files[`${root}/index.html`] !== undefined) return langById("web");
-  const rootFiles = Object.keys(files).filter((path) => path.startsWith(`${root}/`) && !path.endsWith("/.keep"));
+  const rootFiles = Object.keys(files).filter(
+    (path) => path.startsWith(`${root}/`) && !path.endsWith("/.keep"),
+  );
   if (rootFiles.some((path) => path.endsWith(".jsx"))) return langById("react");
   for (const path of rootFiles) {
     const language = langForPath(path);
@@ -327,7 +367,13 @@ export function IDE() {
   const [addedLangs, setAddedLangs] = useState<string[]>([]);
   const [showAdd, setShowAdd] = useState(false);
   const [failed, setFailed] = useState(false);
-  const [ai, setAi] = useState<{ open: boolean; loading: boolean; text: string; error: string; findings?: Finding[] }>({
+  const [ai, setAi] = useState<{
+    open: boolean;
+    loading: boolean;
+    text: string;
+    error: string;
+    findings?: Finding[];
+  }>({
     open: false,
     loading: false,
     text: "",
@@ -344,12 +390,42 @@ export function IDE() {
   const [sharing, setSharing] = useState(false);
   const [userEmail, setUserEmail] = useState("");
   const [driveToken, setDriveToken] = useState<string | null>(null);
-  const [driveSyncState, setDriveSyncState] = useState<"disconnected" | "syncing" | "synced" | "error">("disconnected");
+  const [driveSyncState, setDriveSyncState] = useState<
+    "disconnected" | "syncing" | "synced" | "error"
+  >("disconnected");
   const [uploadingDrive, setUploadingDrive] = useState(false);
   const [driveUrl, setDriveUrl] = useState<string | null>(null);
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
 
-  const term = useRef<TerminalHandle>(null);
+  // Terminal tabs (like VS Code). Each tab has its own shell. Program output goes to the tab that
+  // started the run; UI actions use the active tab.
+  const termHandles = useRef(new Map<string, TerminalHandle>());
+  const [termSessions, setTermSessions] = useState<{ id: string; name: string }[]>([
+    { id: "t1", name: "Terminal 1" },
+  ]);
+  const [activeTermId, setActiveTermId] = useState("t1");
+  const activeTermIdRef = useRef("t1");
+  activeTermIdRef.current = activeTermId;
+  const runTermId = useRef<string | null>(null);
+  const termCounter = useRef(1);
+  const shellWaitingMap = useRef(new Map<string, boolean>());
+  const shellHistories = useRef(new Map<string, string[]>());
+  const activeTerm = (): TerminalHandle | null =>
+    termHandles.current.get(activeTermIdRef.current) ?? null;
+  const runTerm = (): TerminalHandle | null =>
+    (runTermId.current ? termHandles.current.get(runTermId.current) : undefined) ?? activeTerm();
+  // Last HTML page opened in each web folder, so the preview keeps it while CSS or JS is edited.
+  const previewPages = useRef<Record<string, string>>({});
+  const previewPageFor = (
+    files: Record<string, string>,
+    rootName: string | undefined,
+    active: string | undefined,
+  ) => {
+    const root = rootName ?? "";
+    const page = pickPreviewPage(files, root, active, previewPages.current[root]);
+    previewPages.current[root] = page;
+    return page;
+  };
   const pyWorker = useRef<Worker | null>(null);
   const sab = useRef<SharedArrayBuffer | null>(null);
   const nodeWorker = useRef<Worker | null>(null);
@@ -373,10 +449,9 @@ export function IDE() {
   const setTerminalDirectory = (directory: string) => {
     if (cwdRef.current === directory) return;
     cwdRef.current = directory;
-    if (shellWaiting.current) term.current?.redrawPrompt(prompt());
+    for (const [id, waiting] of shellWaitingMap.current)
+      if (waiting) termHandles.current.get(id)?.redrawPrompt(prompt());
   };
-  const shellHistory = useRef<string[]>([]);
-  const shellWaiting = useRef(false);
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
   const runRemoteFn = useServerFn(runRemote);
   const askAiFn = useServerFn(askAiTa);
@@ -386,7 +461,10 @@ export function IDE() {
     void supabase.auth.getSession().then(({ data }) => {
       setUserEmail(data.session?.user.email ?? "");
       setDriveToken(data.session?.provider_token ?? null);
-      if (data.session) void getProStatusFn().then((status) => setIsPro(status.isPro)).catch(() => setIsPro(false));
+      if (data.session)
+        void getProStatusFn()
+          .then((status) => setIsPro(status.isPro))
+          .catch(() => setIsPro(false));
     });
     const {
       data: { subscription },
@@ -394,7 +472,10 @@ export function IDE() {
       setUserEmail(session?.user.email ?? "");
       setDriveToken(session?.provider_token ?? null);
       setIsPro(false);
-      if (session) void getProStatusFn().then((status) => setIsPro(status.isPro)).catch(() => setIsPro(false));
+      if (session)
+        void getProStatusFn()
+          .then((status) => setIsPro(status.isPro))
+          .catch(() => setIsPro(false));
     });
     return () => subscription.unsubscribe();
   }, []);
@@ -423,7 +504,11 @@ export function IDE() {
     [addedLangs],
   );
   const activeRoot = active.split("/")[0] || langId;
-  const activeLang = languageForWorkspaceRoot(activeRoot, files) ?? langForPath(active) ?? langById(langId) ?? langById("python")!;
+  const activeLang =
+    languageForWorkspaceRoot(activeRoot, files) ??
+    langForPath(active) ??
+    langById(langId) ??
+    langById("python")!;
   useEffect(() => {
     if (!active) {
       setLangId("");
@@ -454,7 +539,8 @@ export function IDE() {
   };
   const installApp = async () => {
     setMore(false);
-    const isInstalled = window.matchMedia("(display-mode: standalone)").matches ||
+    const isInstalled =
+      window.matchMedia("(display-mode: standalone)").matches ||
       (navigator as Navigator & { standalone?: boolean }).standalone === true;
     if (isInstalled) {
       flash("LabBench is already installed.", null, 5000);
@@ -464,10 +550,15 @@ export function IDE() {
       await installPrompt.prompt();
       const choice = await installPrompt.userChoice;
       setInstallPrompt(null);
-      flash(choice.outcome === "accepted" ? "LabBench installed." : "Installation dismissed.", null, 5000);
+      flash(
+        choice.outcome === "accepted" ? "LabBench installed." : "Installation dismissed.",
+        null,
+        5000,
+      );
       return;
     }
-    const isAppleMobile = /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+    const isAppleMobile =
+      /iphone|ipad|ipod/i.test(navigator.userAgent) ||
       (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
     flash(
       isAppleMobile
@@ -479,7 +570,7 @@ export function IDE() {
   };
   const write = (s: string) => {
     outputLog.current += s;
-    term.current?.write(s);
+    runTerm()?.write(s);
   };
 
   const performDriveSync = useCallback(() => {
@@ -557,7 +648,8 @@ export function IDE() {
       if (l) setAddedLangs(JSON.parse(l));
       const storedCredits = parseDailyCredits(localStorage.getItem("labbench.aiCredits"));
       const currentDate = today();
-      const currentCredits = storedCredits?.date === currentDate ? storedCredits : { date: currentDate, used: 0 };
+      const currentCredits =
+        storedCredits?.date === currentDate ? storedCredits : { date: currentDate, used: 0 };
       setCredits(currentCredits);
       localStorage.setItem("labbench.aiCredits", JSON.stringify(currentCredits));
       setInkSaver(localStorage.getItem("labbench.ink") === "1");
@@ -570,23 +662,34 @@ export function IDE() {
     const refresh = () => {
       const currentDate = today();
       let savedCredits: { date: string; used: number } | null = null;
-      try { savedCredits = parseDailyCredits(localStorage.getItem("labbench.aiCredits")); } catch { /* use in-memory credits */ }
+      try {
+        savedCredits = parseDailyCredits(localStorage.getItem("labbench.aiCredits"));
+      } catch {
+        /* use in-memory credits */
+      }
       if (savedCredits?.date === currentDate) {
         setCredits(savedCredits);
       } else {
         const next = { date: currentDate, used: 0 };
         setCredits(next);
-        try { localStorage.setItem("labbench.aiCredits", JSON.stringify(next)); } catch { /* in-memory reset still applies */ }
+        try {
+          localStorage.setItem("labbench.aiCredits", JSON.stringify(next));
+        } catch {
+          /* in-memory reset still applies */
+        }
       }
     };
     const scheduleMidnightCheck = () => {
       if (timer) window.clearTimeout(timer);
       const now = new Date();
       const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
-      timer = window.setTimeout(() => {
-        refresh();
-        scheduleMidnightCheck();
-      }, Math.max(100, midnight - now.getTime() + 50));
+      timer = window.setTimeout(
+        () => {
+          refresh();
+          scheduleMidnightCheck();
+        },
+        Math.max(100, midnight - now.getTime() + 50),
+      );
     };
     const refreshWhenActive = () => {
       if (document.visibilityState === "visible") refresh();
@@ -613,9 +716,21 @@ export function IDE() {
     const t = setTimeout(() => {
       const path = activeRef.current;
       outputLog.current = "";
-      lastRun.current = { path, lang: activeLang.label, code: buildAiCode(activeLang, path, files) };
+      lastRun.current = {
+        path,
+        lang: activeLang.label,
+        code: buildAiCode(activeLang, path, files),
+      };
       setFailed(false);
-      setPreviewDoc(buildPreview(activeLang, files, active.split("/")[0]));
+      setPreviewDoc(
+        buildPreview(
+          activeLang,
+          files,
+          active.split("/")[0],
+          active,
+          previewPageFor(files, active.split("/")[0], active),
+        ),
+      );
     }, 400);
     return () => clearTimeout(t);
   }, [files, isWeb, activeLang, active]);
@@ -629,15 +744,22 @@ export function IDE() {
     if (content !== undefined && isBinaryFile(content)) {
       const temporary = decodeTemporaryUpload(content);
       if (temporary) {
-        void getTemporaryUploadUrl({ data: { id: temporary.id } }).then((download) => {
-          if (!download) return flash("This temporary upload has expired. Upload the file again to use it.");
-          const anchor = document.createElement("a");
-          anchor.href = download.url;
-          anchor.download = download.fileName;
-          anchor.rel = "noreferrer";
-          anchor.click();
-          flash("Downloading temporary workspace file");
-        }).catch((error) => flash(`Could not download file: ${error instanceof Error ? error.message : String(error)}`));
+        void getTemporaryUploadUrl({ data: { id: temporary.id } })
+          .then((download) => {
+            if (!download)
+              return flash("This temporary upload has expired. Upload the file again to use it.");
+            const anchor = document.createElement("a");
+            anchor.href = download.url;
+            anchor.download = download.fileName;
+            anchor.rel = "noreferrer";
+            anchor.click();
+            flash("Downloading temporary workspace file");
+          })
+          .catch((error) =>
+            flash(
+              `Could not download file: ${error instanceof Error ? error.message : String(error)}`,
+            ),
+          );
         return;
       }
       const blob = binaryFileToBlob(content);
@@ -673,7 +795,10 @@ export function IDE() {
             onClick={() => {
               setOpenFolders((open) => ({ ...open, [node.path]: !open[node.path] }));
               setTerminalDirectory(node.path);
-              setLangId(languageForWorkspaceRoot(node.path.split("/")[0] || "", filesRef.current)?.id || "python");
+              setLangId(
+                languageForWorkspaceRoot(node.path.split("/")[0] || "", filesRef.current)?.id ||
+                  "python",
+              );
             }}
             className="flex min-w-0 flex-1 items-center gap-1 py-1 text-left"
             style={{ paddingLeft: `${8 + depth * 12}px` }}
@@ -710,7 +835,10 @@ export function IDE() {
                 className={`group flex items-center gap-1 rounded py-1 pr-1 ${active === path ? "bg-accent text-accent-foreground" : "hover:bg-muted"}`}
                 style={{ paddingLeft: `${28 + depth * 12}px` }}
               >
-                <button className="flex min-w-0 flex-1 items-center gap-1.5 text-left" onClick={() => openFile(path)}>
+                <button
+                  className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+                  onClick={() => openFile(path)}
+                >
                   <FileCode2 size={13} className="shrink-0 text-primary" />
                   <span className="truncate">{path.slice(node.path.length + 1)}</span>
                 </button>
@@ -741,8 +869,13 @@ export function IDE() {
   const selectLanguage = (l: Language) => {
     setDrawer(false);
     setLangId(l.id);
-    const knownRoots = [...new Set(Object.keys(filesRef.current).map((path) => path.split("/")[0]!))];
-    const root = knownRoots.find((candidate) => languageForWorkspaceRoot(candidate, filesRef.current)?.id === l.id) ?? l.id;
+    const knownRoots = [
+      ...new Set(Object.keys(filesRef.current).map((path) => path.split("/")[0]!)),
+    ];
+    const root =
+      knownRoots.find(
+        (candidate) => languageForWorkspaceRoot(candidate, filesRef.current)?.id === l.id,
+      ) ?? l.id;
     setTerminalDirectory(root);
     setOpenFolders((o) => ({ ...o, [root]: true }));
     const entry = `${root}/${l.entry}`;
@@ -805,7 +938,12 @@ export function IDE() {
     [],
   );
 
-  const runPython = (code: string, project: Record<string, string>, entry: string, internet: boolean) => {
+  const runPython = (
+    code: string,
+    project: Record<string, string>,
+    entry: string,
+    internet: boolean,
+  ) => {
     const w = pyWorker.current ?? spawnPython();
     const inputs: string[] = [];
     let seen = 0,
@@ -826,7 +964,7 @@ export function IDE() {
       else if (m.type === "status") write(`\x1b[90m${m.text}\x1b[0m\r\n`);
       else if (m.type === "image") setImages((i) => [...i, m.data]);
       else if (m.type === "input") {
-        const v = await term.current!.readLine();
+        const v = await runTerm()!.readLine();
         const ctrl = new Int32Array(sab.current!, 0, 2);
         const bytes = new TextEncoder().encode(v ?? "");
         new Uint8Array(sab.current!, 8).set(bytes.slice(0, 65536));
@@ -834,7 +972,7 @@ export function IDE() {
         Atomics.store(ctrl, 0, 1);
         Atomics.notify(ctrl, 0);
       } else if (m.type === "need-input") {
-        const v = await term.current!.readLine();
+        const v = await runTerm()!.readLine();
         if (v === null || abortRef.current) return;
         outputLog.current += v + "\n";
         inputs.push(v);
@@ -843,7 +981,15 @@ export function IDE() {
         w.postMessage({ type: "run", code, files: project, entry, inputs, attempt, internet });
       } else if (m.type === "done") finish(m.code);
     };
-    w.postMessage({ type: "run", code, files: project, entry, inputs: sab.current ? null : inputs, attempt, internet });
+    w.postMessage({
+      type: "run",
+      code,
+      files: project,
+      entry,
+      inputs: sab.current ? null : inputs,
+      attempt,
+      internet,
+    });
   };
 
   const pip = (pkgs: string[], list = false) =>
@@ -862,7 +1008,11 @@ export function IDE() {
   // SQL runs locally in SQLite (sql.js). Each run starts with a fresh database.
   const runSqlLocal = (script: string) => {
     sqlWorker.current?.terminate();
-    const w = new Worker(URL.createObjectURL(new Blob([buildSqlWorkerSource(window.location.origin)], { type: "text/javascript" })));
+    const w = new Worker(
+      URL.createObjectURL(
+        new Blob([buildSqlWorkerSource(window.location.origin)], { type: "text/javascript" }),
+      ),
+    );
     sqlWorker.current = w;
     w.onmessage = (e) => {
       const m = e.data;
@@ -895,7 +1045,12 @@ export function IDE() {
     w.postMessage({ files, entry });
   };
 
-  const runCompiled = async (l: Language, code: string, extraFiles: Record<string, string>, entry: string) => {
+  const runCompiled = async (
+    l: Language,
+    code: string,
+    extraFiles: Record<string, string>,
+    entry: string,
+  ) => {
     let stdin = "";
     let shown = 0;
     const interactiveCapable = /^(gcc|clang|openjdk|mono|dotnet)/.test(l.compiler ?? "");
@@ -904,7 +1059,7 @@ export function IDE() {
         "\x1b[36mThis language takes all input up front. Type each line, then press Ctrl+D to run.\x1b[0m\r\n",
       );
       for (;;) {
-        const v = await term.current!.readLine();
+        const v = await runTerm()!.readLine();
         if (abortRef.current) return;
         if (v === null) break;
         stdin += v + "\n";
@@ -917,7 +1072,9 @@ export function IDE() {
       let r: Awaited<ReturnType<typeof runRemoteFn>>;
       try {
         lastStdin.current = stdin;
-        r = await runRemoteFn({ data: { compiler: l.compiler!, language: l.id, code, stdin, extraFiles, entry } });
+        r = await runRemoteFn({
+          data: { compiler: l.compiler!, language: l.id, code, stdin, extraFiles, entry },
+        });
       } catch (e) {
         write(`\x1b[31m${String(e)}\x1b[0m\r\n`);
         finish(1);
@@ -931,7 +1088,7 @@ export function IDE() {
         shown = r.stdout.length;
       }
       if (r.needInput && r.interactive) {
-        const v = await term.current!.readLine();
+        const v = await runTerm()!.readLine();
         if (v === null || abortRef.current) return;
         outputLog.current += v + "\n";
         stdin += v + "\n";
@@ -953,13 +1110,20 @@ export function IDE() {
     nodeWorker.current?.terminate();
     sqlWorker.current?.terminate();
     nodeWorker.current = null;
-    if (!shellWaiting.current) term.current?.cancelRead();
+    if (!shellWaitingMap.current.get(runTermId.current ?? "")) runTerm()?.cancelRead();
     write("\x1b[90m[Process interrupted]\x1b[0m\r\n");
     finish(130);
   }, []);
 
-  const runFile = (path: string) =>
+  const runFile = (path: string, targetId?: string) =>
     new Promise<void>((resolve) => {
+      // Shared runtimes (Python, Node, SQL) run one program at a time. Starting another stops the
+      // running one, so its output can never appear in a different terminal.
+      if (status === "running") stopRef.current();
+      const target = targetId ?? activeTermIdRef.current;
+      runTermId.current = target;
+      outputLog.current = "";
+      termHandles.current.get(target)?.clear();
       saveNow();
       const fs = filesRef.current;
       const l = languageForWorkspaceRoot(path.split("/")[0] ?? "", fs) ?? langForPath(path);
@@ -976,7 +1140,15 @@ export function IDE() {
         outputLog.current = "";
         lastRun.current = { path, lang: l.label, code: buildAiCode(l, path, fs) };
         setFailed(false);
-        setPreviewDoc(buildPreview(activeLang, files, active.split("/")[0], active));
+        setPreviewDoc(
+          buildPreview(
+            activeLang,
+            files,
+            active.split("/")[0],
+            active,
+            previewPageFor(files, active.split("/")[0], active),
+          ),
+        );
         setOutTab("preview");
         write(`\x1b[90mOpened live preview for ${path}\x1b[0m\r\n`);
         resolve();
@@ -998,17 +1170,16 @@ export function IDE() {
       if (l.kind === "python") {
         const root = path.split("/")[0] ?? "";
         // Check the internet first so `ping` in the script reports the same result as the desktop.
-        void probeInternetNow().then((internet) => runPython(code, projectFilesFor(root, fs), relativeTo(root, path), internet));
-      }
-      else if (l.id === "sql") {
+        void probeInternetNow().then((internet) =>
+          runPython(code, projectFilesFor(root, fs), relativeTo(root, path), internet),
+        );
+      } else if (l.id === "sql") {
         runSqlLocal(code);
-      }
-      else if (l.kind === "node") {
+      } else if (l.kind === "node") {
         const root = path.split("/")[0] ?? "";
         const entry = relativeTo(root, path);
         runNode({ ...projectFilesFor(root, fs), [entry]: code }, entry);
-      }
-      else {
+      } else {
         const root = path.split("/")[0] ?? "";
         const entry = relativeTo(root, path);
         const extraFiles = projectFilesFor(root, fs);
@@ -1017,48 +1188,81 @@ export function IDE() {
       }
     });
 
-  // ---------- Shell ----------
-  const execLine = async (line: string) => {
-    const r = runShell(line, filesRef.current, cwdRef.current, shellHistory.current);
-    if (r.clear) term.current?.clear();
-    if (r.out) term.current?.write(r.out);
+  // ---------- Shell (one independent shell per terminal tab) ----------
+  const welcome =
+    "\x1b[1;36mLabBench terminal\x1b[0m — type \x1b[1mhelp\x1b[0m for Linux commands, or press \x1b[1mRun\x1b[0m (Ctrl+Enter).\r\n";
+  const execLine = async (line: string, id: string) => {
+    const h = termHandles.current.get(id);
+    const history = shellHistories.current.get(id) ?? [];
+    const r = runShell(line, filesRef.current, cwdRef.current, history);
+    if (r.clear) h?.clear();
+    if (r.out) h?.write(r.out);
     if (r.files) {
       setFiles(r.files);
       filesRef.current = r.files;
     }
     if (r.cwd !== undefined) cwdRef.current = r.cwd;
-    if (r.action?.type === "run") await runFile(r.action.arg[0] ?? activeRef.current);
+    if (r.action?.type === "run") await runFile(r.action.arg[0] ?? activeRef.current, id);
     else if (r.action?.type === "pip") await pip(r.action.arg);
     else if (r.action?.type === "piplist") await pip([], true);
   };
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      while (alive && !term.current?.isReady()) await sleep(80);
-      if (!alive) return;
-      term.current!.write(
-        "\x1b[1;36mLabBench terminal\x1b[0m — type \x1b[1mhelp\x1b[0m for Linux commands, or press \x1b[1mRun\x1b[0m (Ctrl+Enter).\r\n",
-      );
-      while (alive) {
-        term.current!.write(prompt());
-        shellWaiting.current = true;
-        const l = await term.current!.readLine({ history: true });
-        shellWaiting.current = false;
-        if (l === null || !alive) continue;
-        if (l.trim()) shellHistory.current.push(l);
-        try {
-          await execLine(l.trim());
-        } catch (e) {
-          term.current!.write(`\x1b[31m${String(e)}\x1b[0m\r\n`);
-        }
+  const openShells = useRef(new Set<string>());
+  const runShellLoop = async (id: string) => {
+    openShells.current.add(id);
+    while (openShells.current.has(id) && !termHandles.current.get(id)?.isReady()) await sleep(80);
+    if (!openShells.current.has(id)) return;
+    termHandles.current.get(id)?.write(welcome);
+    while (openShells.current.has(id)) {
+      const h = termHandles.current.get(id);
+      if (!h) break;
+      h.write(prompt());
+      shellWaitingMap.current.set(id, true);
+      const l = await h.readLine({ history: true });
+      shellWaitingMap.current.set(id, false);
+      if (l === null || !openShells.current.has(id)) continue;
+      const history = shellHistories.current.get(id) ?? [];
+      if (l.trim()) history.push(l);
+      shellHistories.current.set(id, history);
+      try {
+        await execLine(l.trim(), id);
+      } catch (e) {
+        termHandles.current.get(id)?.write(`\x1b[31m${String(e)}\x1b[0m\r\n`);
       }
-    })();
-    return () => {
-      alive = false;
-    };
+    }
+  };
+  const shellLoopsStarted = useRef(new Set<string>());
+  useEffect(() => {
+    for (const session of termSessions) {
+      if (shellLoopsStarted.current.has(session.id)) continue;
+      shellLoopsStarted.current.add(session.id);
+      void runShellLoop(session.id);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [termSessions]);
+
+  const MAX_TERMINALS = 6;
+  const openTerminal = () => {
+    if (termSessions.length >= MAX_TERMINALS)
+      return flash(`You can open up to ${MAX_TERMINALS} terminals`);
+    termCounter.current += 1;
+    const id = `t${termCounter.current}`;
+    setTermSessions((list) => [...list, { id, name: `Terminal ${termCounter.current}` }]);
+    setActiveTermId(id);
+  };
+  const closeTerminal = (id: string) => {
+    if (termSessions.length <= 1) return;
+    if (status === "running" && runTermId.current === id) {
+      return flash("Stop the program running in this terminal first");
+    }
+    openShells.current.delete(id);
+    shellWaitingMap.current.delete(id);
+    termHandles.current.get(id)?.cancelRead();
+    setTermSessions((list) => list.filter((t) => t.id !== id));
+    if (activeTermIdRef.current === id) {
+      const other = termSessions.find((t) => t.id !== id);
+      if (other) setActiveTermId(other.id);
+    }
+  };
 
   const run = () => {
     if (!activeRef.current) return;
@@ -1066,16 +1270,29 @@ export function IDE() {
     if (isWeb) {
       const path = activeRef.current;
       outputLog.current = "";
-      lastRun.current = { path, lang: activeLang.label, code: buildAiCode(activeLang, path, files) };
+      lastRun.current = {
+        path,
+        lang: activeLang.label,
+        code: buildAiCode(activeLang, path, files),
+      };
       setFailed(false);
-      setPreviewDoc(buildPreview(activeLang, files, path.split("/")[0], path));
+      setPreviewDoc(
+        buildPreview(
+          activeLang,
+          files,
+          path.split("/")[0],
+          path,
+          previewPageFor(files, path.split("/")[0], path),
+        ),
+      );
       setOutTab("preview");
       write(`\x1b[90mOpened live preview for ${path}\x1b[0m\r\n`);
       return;
     }
     setOutTab("terminal");
     const file = activeRef.current;
-    if (shellWaiting.current) term.current?.injectLine(`run ~/${file}`);
+    const aid = activeTermIdRef.current;
+    if (shellWaitingMap.current.get(aid)) termHandles.current.get(aid)?.injectLine(`run ~/${file}`);
   };
 
   // ---------- Format ----------
@@ -1164,9 +1381,10 @@ export function IDE() {
     const name = prompt_(
       `New file in "${cwdRef.current}/" (e.g. helper.${langById(langId)?.ext[0] ?? "txt"}):`,
     );
-    if (!name || /[\\]/.test(name)) return;
-    const p = `${cwdRef.current || langId || "python"}/${name}`;
-    if (files[p] !== undefined) return flash("File already exists");
+    if (!name) return;
+    const plan = planCreate(filesRef.current, cwdRef.current || langId || "python", name, "file");
+    if (!plan.ok) return flash(plan.error);
+    const p = plan.path;
     setFiles((f) => ({ ...f, [p]: "" }));
     setOpenFolders((o) => ({ ...o, [cwdRef.current]: true }));
     openFile(p);
@@ -1190,10 +1408,21 @@ export function IDE() {
         const path = `${target}/${name}`;
         occupied.add(path);
         if (file.size > 5 * 1024 * 1024) {
-          if (file.size > 50 * 1024 * 1024) throw new Error(`${file.name} is larger than the 50 MB temporary upload limit`);
-          const signed = await createTemporaryUpload({ data: { name: file.name, size: file.size, mimeType: file.type || "application/octet-stream" } });
-          const { error } = await supabase.storage.from("labbench-temporary-uploads")
-            .uploadToSignedUrl(signed.path, signed.token, file, { contentType: file.type || "application/octet-stream", upsert: false });
+          if (file.size > 50 * 1024 * 1024)
+            throw new Error(`${file.name} is larger than the 50 MB temporary upload limit`);
+          const signed = await createTemporaryUpload({
+            data: {
+              name: file.name,
+              size: file.size,
+              mimeType: file.type || "application/octet-stream",
+            },
+          });
+          const { error } = await supabase.storage
+            .from("labbench-temporary-uploads")
+            .uploadToSignedUrl(signed.path, signed.token, file, {
+              contentType: file.type || "application/octet-stream",
+              upsert: false,
+            });
           if (error) throw new Error(`Could not upload ${file.name}: ${error.message}`);
           additions[path] = encodeTemporaryUpload(signed.id, file.type);
         } else {
@@ -1203,8 +1432,12 @@ export function IDE() {
       filesRef.current = { ...filesRef.current, ...additions };
       setFiles((current) => ({ ...current, ...additions }));
       setOpenFolders((open) => ({ ...open, [target]: true }));
-      const cloudCount = Object.values(additions).filter((content) => decodeTemporaryUpload(content)).length;
-      flash(`${Object.keys(additions).length} file${Object.keys(additions).length === 1 ? "" : "s"} added to ${target}${cloudCount ? ` · ${cloudCount} stored temporarily for 24 hours` : ""}`);
+      const cloudCount = Object.values(additions).filter((content) =>
+        decodeTemporaryUpload(content),
+      ).length;
+      flash(
+        `${Object.keys(additions).length} file${Object.keys(additions).length === 1 ? "" : "s"} added to ${target}${cloudCount ? ` · ${cloudCount} stored temporarily for 24 hours` : ""}`,
+      );
     } catch (error) {
       flash(`Could not upload files: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1212,12 +1445,11 @@ export function IDE() {
   const newFolder = () => {
     if (!langId) return flash("Select a language first");
     const folderName = prompt_("New folder name:");
-    if (!folderName || /[\\/]/.test(folderName) || folderName === "." || folderName === "..") return;
+    if (!folderName) return;
     const parent = cwdRef.current || langId || "python";
-    const path = `${parent}/${folderName}`;
-    if (files[`${path}/.keep`] !== undefined || Object.keys(files).some((file) => file.startsWith(`${path}/`))) {
-      return flash("Folder already exists");
-    }
+    const plan = planCreate(filesRef.current, parent, folderName, "folder");
+    if (!plan.ok) return flash(plan.error);
+    const path = plan.path;
     setFiles((current) => ({ ...current, [`${path}/.keep`]: "" }));
     setOpenFolders((open) => ({ ...open, [parent]: true, [path]: true }));
     cwdRef.current = path;
@@ -1227,8 +1459,10 @@ export function IDE() {
     const dir = p.slice(0, p.lastIndexOf("/"));
     const n = p.slice(p.lastIndexOf("/") + 1);
     const name = prompt_("Rename to:", n);
-    if (!name || name === n || /[\\/]/.test(name)) return;
-    const np = `${dir}/${name}`;
+    if (!name) return;
+    const plan = planRename(filesRef.current, p, "file", name);
+    if (!plan.ok) return flash(plan.error);
+    const np = plan.path;
     setFiles((f) => {
       const c: Record<string, string> = { ...f, [np]: f[p] ?? "" };
       delete c[p];
@@ -1272,7 +1506,13 @@ export function IDE() {
   const snapshotPreview = async (ratio: number) => {
     const W = 1280,
       H = 720;
-    const doc = buildPreview(activeLang, filesRef.current, activeRef.current.split("/")[0], activeRef.current);
+    const doc = buildPreview(
+      activeLang,
+      filesRef.current,
+      activeRef.current.split("/")[0],
+      activeRef.current,
+      previewPageFor(filesRef.current, activeRef.current.split("/")[0], activeRef.current),
+    );
     const frame = document.createElement("iframe");
     frame.setAttribute("sandbox", "allow-scripts allow-same-origin");
     frame.style.cssText = `position:fixed;left:-10000px;top:0;width:${W}px;height:${H}px;border:0;background:#fff`;
@@ -1302,29 +1542,36 @@ export function IDE() {
     if (isWeb) return snapshotPreview(ratio);
     if (!captureRef.current) throw new Error("Nothing to capture");
     setOutTab("terminal");
-    const shot = term.current?.snapshot({ dark: !inkSaver, scale: ratio });
+    const shot = runTerm()?.snapshot({ dark: !inkSaver, scale: ratio });
     if (!shot) throw new Error("Nothing to capture");
     return shot;
   };
   const snapshotWithPlots = async (ratio = 2) => {
     const base = await snapshot(ratio);
     if (isWeb || images.length === 0) return base;
-    const loadImage = (src: string) => new Promise<HTMLImageElement>((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => resolve(image);
-      image.onerror = () => reject(new Error("Could not capture a plot image"));
-      image.src = src;
-    });
+    const loadImage = (src: string) =>
+      new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error("Could not capture a plot image"));
+        image.src = src;
+      });
     const [terminalImage, ...plots] = await Promise.all([base, ...images].map(loadImage));
     const padding = Math.round(24 * ratio);
     const labelHeight = Math.round(28 * ratio);
     const plotSizes = plots.map((plot) => {
       const scale = Math.min(ratio, (terminalImage.naturalWidth - padding * 2) / plot.naturalWidth);
-      return { width: Math.round(plot.naturalWidth * scale), height: Math.round(plot.naturalHeight * scale) };
+      return {
+        width: Math.round(plot.naturalWidth * scale),
+        height: Math.round(plot.naturalHeight * scale),
+      };
     });
     const canvas = document.createElement("canvas");
     canvas.width = terminalImage.naturalWidth;
-    canvas.height = terminalImage.naturalHeight + padding + plotSizes.reduce((height, size) => height + labelHeight + size.height + padding, 0);
+    canvas.height =
+      terminalImage.naturalHeight +
+      padding +
+      plotSizes.reduce((height, size) => height + labelHeight + size.height + padding, 0);
     const context = canvas.getContext("2d");
     if (!context) return base;
     context.fillStyle = inkSaver ? "#ffffff" : "#1e1e1e";
@@ -1354,12 +1601,46 @@ export function IDE() {
       flash("Capture failed: " + String(e));
     }
   };
+  const shareOutput = async () => {
+    try {
+      const dataUrl = await snapshotWithPlots();
+      const blob = await (await fetch(dataUrl)).blob();
+      const name = pngFileName(currentFolder() || "labbench", new Date());
+      const outcome = await shareOrDownload(blob, name, `LabBench output: ${name}`, {
+        canShareFiles: (files) =>
+          typeof navigator !== "undefined" &&
+          typeof navigator.canShare === "function" &&
+          navigator.canShare({ files }),
+        share: (data) => navigator.share(data),
+        download: (file) => {
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(file);
+          a.download = file.name;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        },
+      });
+      flash(
+        outcome === "downloaded"
+          ? "Screenshot downloaded (this browser cannot share files)"
+          : outcome === "shared"
+            ? "Screenshot ready to share"
+            : "Share cancelled",
+      );
+    } catch (e) {
+      flash("Capture failed: " + String(e));
+    }
+  };
   const uploadToDrive = async () => {
     setMore(false);
-    
+
     // Check if student is signed in
     if (!userEmail) {
-      if (confirm("You need to sign in with Google to upload files to your Google Drive. Sign in now?")) {
+      if (
+        confirm(
+          "You need to sign in with Google to upload files to your Google Drive. Sign in now?",
+        )
+      ) {
         await googleSignIn();
       }
       return;
@@ -1385,7 +1666,10 @@ export function IDE() {
       });
 
       if (result.ok && result.folderUrl) {
-        flash(`Uploaded ${result.filesCount} files to Google Drive (LabBench folder)!`, result.folderUrl);
+        flash(
+          `Uploaded ${result.filesCount} files to Google Drive (LabBench folder)!`,
+          result.folderUrl,
+        );
       } else {
         flash(result.error || "Failed to upload to Google Drive");
       }
@@ -1436,24 +1720,31 @@ export function IDE() {
   const renameFolder = (dir: string) => {
     const oldName = dir.slice(dir.lastIndexOf("/") + 1);
     const name = prompt_("Rename folder to:", oldName);
-    if (!name || name === oldName || /[\\/]/.test(name) || name === "." || name === "..") return;
-    const parent = dir.includes("/") ? dir.slice(0, dir.lastIndexOf("/")) : "";
-    const nextPath = parent ? `${parent}/${name}` : name;
-    if (Object.keys(filesRef.current).some((path) => path === `${nextPath}/.keep` || path.startsWith(`${nextPath}/`))) {
-      return flash("A folder with that name already exists");
-    }
-    const remap = (path: string) => path === dir || path.startsWith(`${dir}/`) ? `${nextPath}${path.slice(dir.length)}` : path;
-    setFiles((current) => Object.fromEntries(Object.entries(current).map(([path, content]) => [remap(path), content])));
-    filesRef.current = Object.fromEntries(Object.entries(filesRef.current).map(([path, content]) => [remap(path), content]));
+    if (!name) return;
+    const plan = planRename(filesRef.current, dir, "folder", name);
+    if (!plan.ok) return flash(plan.error);
+    const nextPath = plan.path;
+    const remap = (path: string) =>
+      path === dir || path.startsWith(`${dir}/`) ? `${nextPath}${path.slice(dir.length)}` : path;
+    setFiles((current) =>
+      Object.fromEntries(Object.entries(current).map(([path, content]) => [remap(path), content])),
+    );
+    filesRef.current = Object.fromEntries(
+      Object.entries(filesRef.current).map(([path, content]) => [remap(path), content]),
+    );
     setTabs((current) => current.map(remap));
-    if (activeRef.current === dir || activeRef.current.startsWith(`${dir}/`)) setActive(remap(activeRef.current));
-    if (cwdRef.current === dir || cwdRef.current.startsWith(`${dir}/`)) cwdRef.current = remap(cwdRef.current);
-    setOpenFolders((current) => Object.fromEntries(Object.entries(current).map(([path, open]) => [remap(path), open])));
+    if (activeRef.current === dir || activeRef.current.startsWith(`${dir}/`))
+      setActive(remap(activeRef.current));
+    if (cwdRef.current === dir || cwdRef.current.startsWith(`${dir}/`))
+      cwdRef.current = remap(cwdRef.current);
+    setOpenFolders((current) =>
+      Object.fromEntries(Object.entries(current).map(([path, open]) => [remap(path), open])),
+    );
   };
   const clearScreen = () => {
     setMore(false);
-    term.current?.clear();
-    if (term.current?.isReading()) term.current.write(prompt());
+    activeTerm()?.clear();
+    if (activeTerm()?.isReading()) activeTerm()?.write(prompt());
   };
   const googleSignIn = async () => {
     const { error } = await supabase.auth.signInWithOAuth({
@@ -1560,7 +1851,9 @@ export function IDE() {
           <div className="rounded-xl border-2 border-dashed border-primary bg-card px-8 py-7 text-center shadow-2xl">
             <Upload className="mx-auto mb-2 text-primary" />
             <p className="text-sm font-semibold">Drop files to add them to</p>
-            <p className="mt-1 text-xs text-muted-foreground">{cwdRef.current || langId || "the open folder"}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {cwdRef.current || langId || "the open folder"}
+            </p>
           </div>
         </div>
       )}
@@ -1575,7 +1868,10 @@ export function IDE() {
           <Menu />
         </Button>
         <span className="flex-1 truncate text-sm font-semibold">
-          LabBench <span className="font-normal text-muted-foreground">/ {langId ? activeLang.label : "Select a language"}</span>
+          LabBench{" "}
+          <span className="font-normal text-muted-foreground">
+            / {langId ? activeLang.label : "Select a language"}
+          </span>
         </span>
         <Button size="sm" onClick={run} disabled={status === "running" || !active}>
           <Play /> Run
@@ -1678,21 +1974,39 @@ export function IDE() {
                   void uploadIntoCurrentFolder(selection);
                 }}
               />
-              <button onClick={() => uploadInput.current?.click()} title={`Upload files to ${cwdRef.current || "the open folder"}`} aria-label="Upload files" className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">
+              <button
+                onClick={() => uploadInput.current?.click()}
+                title={`Upload files to ${cwdRef.current || "the open folder"}`}
+                aria-label="Upload files"
+                className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
                 <Upload size={14} />
               </button>
-              <button onClick={newFile} title="New file in selected folder" aria-label="New file" className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">
+              <button
+                onClick={newFile}
+                title="New file in selected folder"
+                aria-label="New file"
+                className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
                 <FilePlus size={14} />
               </button>
-              <button onClick={newFolder} title="New folder in selected folder" aria-label="New folder" className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">
+              <button
+                onClick={newFolder}
+                title="New folder in selected folder"
+                aria-label="New folder"
+                className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
                 <FolderPlus size={14} />
               </button>
             </div>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-2 text-[13px]">
-            {tree.length ? tree.map((node) => renderWorkspaceNode(node)) : (
+            {tree.length ? (
+              tree.map((node) => renderWorkspaceNode(node))
+            ) : (
               <p className="px-3 py-3 text-xs leading-relaxed text-muted-foreground">
-                Your workspace is empty. Choose a language to start with a sample file, or create a file or folder here.
+                Your workspace is empty. Choose a language to start with a sample file, or create a
+                file or folder here.
               </p>
             )}
           </div>
@@ -1708,16 +2022,31 @@ export function IDE() {
             {userEmail && (
               <div
                 className={`mt-2 flex items-center gap-2 text-[11px] ${driveSyncState === "error" ? "text-destructive" : "text-muted-foreground"}`}
-                title={driveSyncState === "error" ? "Google Drive sync failed. Check Drive access and reconnect." : "Workspace is synced to Google Drive/My Drive/LabBench/workspace.json"}
+                title={
+                  driveSyncState === "error"
+                    ? "Google Drive sync failed. Check Drive access and reconnect."
+                    : "Workspace is synced to Google Drive/My Drive/LabBench/workspace.json"
+                }
               >
                 <Cloud size={13} />
-                {driveSyncState === "syncing" ? "Syncing workspace…" : driveSyncState === "synced" ? "Workspace synced to Drive" : driveSyncState === "error" ? "Drive sync failed" : "Drive access needed"}
+                {driveSyncState === "syncing"
+                  ? "Syncing workspace…"
+                  : driveSyncState === "synced"
+                    ? "Workspace synced to Drive"
+                    : driveSyncState === "error"
+                      ? "Drive sync failed"
+                      : "Drive access needed"}
               </div>
             )}
             {userEmail ? (
               <>
                 {(!driveToken || driveSyncState === "error") && (
-                  <Button variant="outline" size="sm" className="mt-2 w-full" onClick={() => void googleSignIn()}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-2 w-full"
+                    onClick={() => void googleSignIn()}
+                  >
                     <Cloud /> {driveToken ? "Reconnect Google Drive" : "Connect Google Drive"}
                   </Button>
                 )}
@@ -1758,7 +2087,9 @@ export function IDE() {
                 onChange={(e) => selectLanguage(langById(e.target.value)!)}
                 className="border-r bg-panel px-2 text-xs lg:hidden"
               >
-                <option value="" disabled>Select language</option>
+                <option value="" disabled>
+                  Select language
+                </option>
                 {languages.map((l) => (
                   <option key={l.id} value={l.id}>
                     {l.label}
@@ -1868,7 +2199,12 @@ export function IDE() {
                   <Square /> Stop
                 </Button>
               ) : (
-                <Button size="sm" className="hidden lg:inline-flex" onClick={run} disabled={!active || status === "running"}>
+                <Button
+                  size="sm"
+                  className="hidden lg:inline-flex"
+                  onClick={run}
+                  disabled={!active || status === "running"}
+                >
                   <Play /> Run
                 </Button>
               )}
@@ -1881,7 +2217,8 @@ export function IDE() {
               >
                 <MoreHorizontal />
               </Button>
-                {more && <div className="absolute right-2 top-10 z-30 w-56 rounded-md border bg-popover p-1 shadow-xl">
+              {more && (
+                <div className="absolute right-2 top-10 z-30 w-56 rounded-md border bg-popover p-1 shadow-xl">
                   <Button
                     variant="ghost"
                     size="sm"
@@ -1890,12 +2227,14 @@ export function IDE() {
                   >
                     <Download /> Install as app
                   </Button>
-                  <Button 
-                    variant="ghost" 
-                    size="sm" 
-                    className="w-full justify-start text-primary" 
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start text-primary"
                     disabled={uploadingDrive}
-                    onClick={() => { void uploadToDrive(); }}
+                    onClick={() => {
+                      void uploadToDrive();
+                    }}
                   >
                     {uploadingDrive ? <Loader2 className="animate-spin" /> : <Cloud />}
                     {uploadingDrive ? "Uploading to Drive..." : "Upload to Google Drive"}
@@ -1911,11 +2250,59 @@ export function IDE() {
                   >
                     <GraduationCap /> Product Tour
                   </Button>
-                  <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => { void shareWorkspace(); }}><Share2 /> Send to phone</Button>
-                  <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => { setInkSaver((v) => !v); setMore(false); }}>{inkSaver ? <Moon /> : <Sun />} {inkSaver ? "Dark output" : "Light output"}</Button>
-                  <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => { void downloadPng(); setMore(false); }}><Download /> Download PNG</Button>
-                  <Button variant="ghost" size="sm" className="w-full justify-start" onClick={clearScreen}><RotateCcw /> Clear terminal</Button>
-                </div>}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start"
+                    onClick={() => {
+                      void shareWorkspace();
+                    }}
+                  >
+                    <Share2 /> Send to phone
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start"
+                    onClick={() => {
+                      setInkSaver((v) => !v);
+                      setMore(false);
+                    }}
+                  >
+                    {inkSaver ? <Moon /> : <Sun />} {inkSaver ? "Dark output" : "Light output"}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start"
+                    onClick={() => {
+                      void shareOutput();
+                      setMore(false);
+                    }}
+                  >
+                    <Share2 /> Share screenshot
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start"
+                    onClick={() => {
+                      void downloadPng();
+                      setMore(false);
+                    }}
+                  >
+                    <Download /> Download PNG
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start"
+                    onClick={clearScreen}
+                  >
+                    <RotateCcw /> Clear terminal
+                  </Button>
+                </div>
+              )}
             </div>
 
             <div className="relative min-h-0 flex-1">
@@ -1940,12 +2327,64 @@ export function IDE() {
               <div
                 ref={captureRef}
                 className={`absolute inset-0 flex flex-col ${outTab === "terminal" ? "" : "invisible"} ${inkSaver ? "bg-paper" : "bg-editor"}`}
-                onClick={() => term.current?.focus()}
+                onClick={() => activeTerm()?.focus()}
               >
                 <NetworkStatus />
-                <div className="min-h-0 flex-1">
-                  <Terminal ref={term} dark={!inkSaver} onInterrupt={() => stopRef.current()} />
+                <div className="flex flex-wrap items-center gap-1 border-b border-border bg-background px-2 py-1 text-xs">
+                  {termSessions.map((t) => (
+                    <div
+                      key={t.id}
+                      className={`flex items-center gap-1 rounded px-2 py-0.5 ${
+                        t.id === activeTermId
+                          ? "bg-muted font-semibold text-card-foreground"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setActiveTermId(t.id)}
+                        className="flex items-center gap-1"
+                      >
+                        <TerminalSquare size={12} />
+                        {t.name}
+                      </button>
+                      {termSessions.length > 1 && (
+                        <button
+                          type="button"
+                          aria-label={`Close ${t.name}`}
+                          onClick={() => closeTerminal(t.id)}
+                          className="rounded p-0.5 hover:bg-muted"
+                        >
+                          <X size={12} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    aria-label="New terminal"
+                    title="New terminal"
+                    onClick={openTerminal}
+                    className="ml-1 rounded p-1 text-muted-foreground hover:bg-muted"
+                  >
+                    <Plus size={14} />
+                  </button>
                 </div>
+                {termSessions.map((t) => (
+                  <div
+                    key={t.id}
+                    className={`min-h-0 flex-1 ${t.id === activeTermId ? "" : "hidden"}`}
+                  >
+                    <Terminal
+                      ref={(handle) => {
+                        if (handle) termHandles.current.set(t.id, handle);
+                        else termHandles.current.delete(t.id);
+                      }}
+                      dark={!inkSaver}
+                      onInterrupt={() => stopRef.current()}
+                    />
+                  </div>
+                ))}
                 {images.length > 0 && (
                   <div className="max-h-[45%] overflow-y-auto border-t p-2">
                     {images.map((src, i) => (

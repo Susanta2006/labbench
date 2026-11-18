@@ -2,7 +2,7 @@
 // BUILD_ID is stamped on every build by scripts/stamp-sw.mjs. A changed file is what makes
 // browsers install a new worker. The new worker waits until the page asks it to take over
 // (the "update ready" banner), so a student is never interrupted mid-session.
-const BUILD_ID = "local-1794945651654";
+const BUILD_ID = "local-1795023380109";
 const CACHE_NAME = `labbench-shell-${BUILD_ID}`;
 const APP_SHELL = [
   "/",
